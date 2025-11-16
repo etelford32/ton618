@@ -273,7 +273,11 @@ const Ton618Observatory = () => {
         speed: speed,
         infallSpeed: 0.02 * (1 / radius),
         temp: Math.pow(1 - (radius - ISCO) / 100, 0.75),
-        phase: Math.random() * Math.PI * 2
+        phase: Math.random() * Math.PI * 2,
+        // Velocity fields for proper F=ma integration
+        vRadial: 0,      // Radial velocity (inward/outward)
+        vTangential: 0,  // Tangential velocity (orbital motion)
+        vVertical: 0     // Vertical velocity (perpendicular to disk)
       });
 
       const x = Math.cos(angle) * radius;
@@ -465,16 +469,22 @@ const Ton618Observatory = () => {
         for (let i = 0; i < diskData.length; i++) {
           const p = diskData[i];
 
-          // Orbital motion
-          p.angle += p.speed * params.accretionRate;
+          // === PHYSICS: PROPER VELOCITY-BASED FORCE INTEGRATION ===
+          // F = ma → a = F/m → v += a×Δt → x += v×Δt
 
-          // Infall
-          p.radius -= p.infallSpeed * params.accretionRate;
+          // 1. Calculate intrinsic forces (gravity, viscosity)
+          const baseRadialAccel = -p.infallSpeed * params.accretionRate * 60; // Inward acceleration
+          const baseTangentialVel = p.speed * params.accretionRate * 60; // Orbital velocity
+          const baseVerticalAccel = 0; // No base vertical forces
 
-          // Apply companion star gravitational/magnetic influence
+          // 2. Apply companion star gravitational/magnetic influence
           let starInfluence = null;
+          let radialForce = 0;
+          let tangentialForce = 0;
+          let verticalForce = 0;
+
           if (params.showCompanionStar && companionStar) {
-            // Reuse vector instead of allocating new one
+            // Get current position
             reusableParticlePos.set(
               Math.cos(p.angle) * p.radius,
               p.height,
@@ -486,7 +496,7 @@ const Ton618Observatory = () => {
 
             const force = companionStar.getParticleForce(reusableParticlePos);
 
-            // Apply force to particle motion
+            // Calculate force components if significant
             if (force.length() > 0) {
               // Convert force to cylindrical coordinates (reuse vectors)
               reusableToParticle.set(reusableParticlePos.x, reusableParticlePos.z);
@@ -495,20 +505,40 @@ const Ton618Observatory = () => {
 
               // Project force onto radial and tangential directions
               reusableForceXZ.set(force.x, force.z);
-              const radialForce = reusableForceXZ.dot(reusableRadialDir);
-              const tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
+              radialForce = reusableForceXZ.dot(reusableRadialDir);
+              tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
+              verticalForce = force.y;
 
-              // Apply forces (scaled for simulation stability)
               // Stronger effect when within Roche lobe
               const forceMultiplier = starInfluence.isWithinRocheLobe ? 1.5 : 1.0;
-              p.radius += radialForce * 0.5 * forceMultiplier;
-              p.angle += tangentialForce / (p.radius + 1) * 0.02 * forceMultiplier;
-              p.height += force.y * 0.3 * forceMultiplier;
-
-              // Clamp height to reasonable bounds
-              p.height = Math.max(-10, Math.min(10, p.height));
+              radialForce *= forceMultiplier;
+              tangentialForce *= forceMultiplier;
+              verticalForce *= forceMultiplier;
             }
           }
+
+          // 3. Calculate total acceleration (F/m, assuming m=1 for particles)
+          const totalRadialAccel = baseRadialAccel + radialForce * 30; // Scale factor for visual effect
+          const totalTangentialAccel = tangentialForce * 1.2; // Tangential acceleration from star
+          const totalVerticalAccel = baseVerticalAccel + verticalForce * 18;
+
+          // 4. Update velocities: v += a × Δt
+          const dt = 0.016; // Assume ~60 FPS
+          p.vRadial += totalRadialAccel * dt;
+          p.vTangential = baseTangentialVel + totalTangentialAccel; // Mix with base orbital velocity
+          p.vVertical += totalVerticalAccel * dt;
+
+          // 5. Apply damping to prevent runaway velocities
+          p.vRadial *= 0.95;
+          p.vVertical *= 0.90;
+
+          // 6. Update positions: x += v × Δt
+          p.radius += p.vRadial * dt;
+          p.angle += (p.vTangential / (p.radius + 1)) * dt; // Convert linear to angular velocity
+          p.height += p.vVertical * dt;
+
+          // Clamp height to reasonable bounds
+          p.height = Math.max(-10, Math.min(10, p.height));
 
           // Variability
           p.phase += 0.02;
