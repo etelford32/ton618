@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import CompanionStar from '../physics/CompanionStar';
 
 const Ton618Simulation = () => {
   const containerRef = useRef(null);
@@ -20,6 +21,7 @@ const Ton618Simulation = () => {
   const cameraAngleRef = useRef({ theta: Math.PI / 4, phi: Math.PI / 3 });
   const starPositionsRef = useRef([]);
   const spectrumCanvasRef = useRef(null);
+  const companionStarRef = useRef(null);
   
   const [params, setParams] = useState({
     blackHoleMass: 66,
@@ -39,7 +41,12 @@ const Ton618Simulation = () => {
     showReferenceFrames: true,
     showParticleTrails: true,
     jetLaunchRate: 1.0,
-    spiralStrength: 1.0
+    spiralStrength: 1.0,
+    // Companion star parameters
+    showCompanionStar: true,
+    companionStarDistance: 250,
+    companionStarMass: 40,
+    companionStarTemperature: 40000
   });
 
   const [isPlaying, setIsPlaying] = useState(true);
@@ -580,6 +587,15 @@ const Ton618Simulation = () => {
     const stars = new THREE.Points(starsGeometry, starsMaterial);
     scene.add(stars);
 
+    // Initialize companion star (massive O-type supergiant)
+    const blackHoleMass = 66e9; // 66 billion solar masses
+    const companionStar = new CompanionStar(scene, blackHoleMass, {
+      mass: params.companionStarMass,
+      temperature: params.companionStarTemperature,
+      orbitalRadius: params.companionStarDistance
+    });
+    companionStarRef.current = companionStar;
+
     // Mouse Controls
     let isDragging = false;
     let previousMousePosition = { x: 0, y: 0 };
@@ -1028,6 +1044,11 @@ const Ton618Simulation = () => {
         ring.rotation.x = Math.PI / 2 + (params.inclination / 180) * Math.PI;
       });
 
+      // Update companion star
+      if (params.showCompanionStar && companionStar) {
+        companionStar.update(deltaTime);
+      }
+
       renderer.render(scene, camera);
     };
 
@@ -1053,7 +1074,10 @@ const Ton618Simulation = () => {
         if (lp.mesh) scene.remove(lp.mesh);
       });
       particleTrailsRef.current.forEach(trail => scene.remove(trail));
-      
+
+      // Cleanup companion star
+      if (companionStar) companionStar.destroy();
+
       container.removeChild(renderer.domElement);
       renderer.dispose();
     };
@@ -1293,6 +1317,73 @@ const Ton618Simulation = () => {
             >
               Particle Trails
             </Button>
+          </div>
+
+          <div className="pt-4 border-t border-gray-700">
+            <h3 className="font-semibold text-white mb-3">Companion Star (O-type)</h3>
+
+            <Button
+              variant={params.showCompanionStar ? "default" : "outline"}
+              onClick={() => setParams(p => ({ ...p, showCompanionStar: !p.showCompanionStar }))}
+              className="w-full text-xs mb-3"
+            >
+              {params.showCompanionStar ? "✓" : "○"} Show Companion Star
+            </Button>
+
+            {params.showCompanionStar && (
+              <div className="space-y-3">
+                <div>
+                  <Label className="text-gray-200 text-xs">Orbital Distance: {params.companionStarDistance}</Label>
+                  <Slider
+                    value={[params.companionStarDistance]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarDistance: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ orbitalRadius: v[0] });
+                      }
+                    }}
+                    min={100}
+                    max={500}
+                    step={10}
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-gray-200 text-xs">Star Mass: {params.companionStarMass} M☉</Label>
+                  <Slider
+                    value={[params.companionStarMass]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarMass: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ mass: v[0] });
+                      }
+                    }}
+                    min={15}
+                    max={90}
+                    step={5}
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-gray-200 text-xs">Temperature: {params.companionStarTemperature.toLocaleString()} K</Label>
+                  <Slider
+                    value={[params.companionStarTemperature]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarTemperature: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ temperature: v[0] });
+                      }
+                    }}
+                    min={30000}
+                    max={50000}
+                    step={1000}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="pt-4 border-t border-gray-700">
