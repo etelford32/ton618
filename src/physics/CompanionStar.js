@@ -36,6 +36,7 @@ export class CompanionStar {
     this.angle = params.initialAngle || 0;
     this.inclination = params.inclination || 0; // Orbital plane tilt
     this.eccentricity = params.eccentricity || 0; // 0 = circular orbit
+    this.orbitalSpeedMultiplier = params.orbitalSpeedMultiplier || 0.1; // Much slower by default
 
     // Position and velocity
     this.position = new THREE.Vector3();
@@ -199,7 +200,7 @@ export class CompanionStar {
    * Wind velocities: 1000-3000 km/s
    */
   createStellarWind() {
-    const particleGeometry = new THREE.SphereGeometry(0.08, 6, 6);
+    const particleGeometry = new THREE.SphereGeometry(0.3, 8, 8); // Made bigger for visibility
 
     // Self-emissive shader for wind particles
     const windMaterial = new THREE.ShaderMaterial({
@@ -224,8 +225,8 @@ export class CompanionStar {
         varying float vAlpha;
 
         void main() {
-          vec3 emissive = vColor * 2.0;
-          gl_FragColor = vec4(emissive, vAlpha * 0.6);
+          vec3 emissive = vColor * 3.5; // Brighter emission
+          gl_FragColor = vec4(emissive, vAlpha * 0.8);
         }
       `
     });
@@ -249,14 +250,14 @@ export class CompanionStar {
       const y = Math.sin(phi) * Math.sin(theta);
       const z = Math.cos(phi);
 
-      const startRadius = visualRadius * (1.0 + Math.random() * 0.2);
+      const startRadius = visualRadius * (1.1 + Math.random() * 0.3);
 
       this.windData.push({
         position: new THREE.Vector3(x * startRadius, y * startRadius, z * startRadius),
         direction: new THREE.Vector3(x, y, z).normalize(),
-        velocity: this.windVelocity * 0.01 * (0.8 + Math.random() * 0.4),
-        age: Math.random() * 200,
-        maxAge: 200,
+        velocity: this.windVelocity * 0.05 * (0.8 + Math.random() * 0.4), // 5x faster for visibility
+        age: Math.random() * 300,
+        maxAge: 300, // Longer lifetime
         color: new THREE.Color(0.7 + Math.random() * 0.2, 0.85, 1.0)
       });
     }
@@ -289,7 +290,7 @@ export class CompanionStar {
    */
   createQuantumEffects() {
     const particleCount = 1000;
-    const particleGeometry = new THREE.SphereGeometry(0.05, 4, 4);
+    const particleGeometry = new THREE.SphereGeometry(0.15, 6, 6); // Bigger for visibility
 
     const quantumMaterial = new THREE.ShaderMaterial({
       transparent: true,
@@ -390,7 +391,8 @@ export class CompanionStar {
         particle.position.set(x * visualRadius, y * visualRadius, z * visualRadius);
         particle.direction.set(x, y, z).normalize();
         particle.age = 0;
-        particle.velocity = this.windVelocity * 0.01 * (0.8 + Math.random() * 0.4);
+        particle.velocity = this.windVelocity * 0.05 * (0.8 + Math.random() * 0.4); // Match initialization
+        particle.maxAge = 300; // Update maxAge too
       }
 
       // Set matrix (position relative to star)
@@ -533,8 +535,8 @@ export class CompanionStar {
   update(deltaTime = 0.016) {
     if (!this.mesh) return;
 
-    // Update orbital position
-    this.angle += (this.orbitalVelocity / this.orbitalRadius) * deltaTime;
+    // Update orbital position (much slower with multiplier)
+    this.angle += (this.orbitalVelocity / this.orbitalRadius) * deltaTime * this.orbitalSpeedMultiplier;
     this.updateOrbitalPosition();
 
     // Update mesh position
@@ -620,6 +622,9 @@ export class CompanionStar {
     }
     if (params.showInfluenceSphere !== undefined && this.influenceSphere) {
       this.influenceSphere.visible = params.showInfluenceSphere;
+    }
+    if (params.orbitalSpeedMultiplier !== undefined) {
+      this.orbitalSpeedMultiplier = params.orbitalSpeedMultiplier;
     }
   }
 

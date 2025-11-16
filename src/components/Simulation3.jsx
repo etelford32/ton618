@@ -59,6 +59,7 @@ const Ton618Observatory = () => {
     companionStarMass: 40, // Solar masses
     companionStarTemperature: 40000, // Kelvin
     companionStarVelocity: 0, // Will be calculated
+    orbitalSpeedMultiplier: 0.1, // Slow orbital motion
     // Stellar wind physics
     enableStellarWind: true,
     windVelocity: 2000, // km/s
@@ -395,6 +396,7 @@ const Ton618Observatory = () => {
       mass: params.companionStarMass,
       temperature: params.companionStarTemperature,
       orbitalRadius: params.companionStarDistance,
+      orbitalSpeedMultiplier: params.orbitalSpeedMultiplier,
       enableWind: params.enableStellarWind,
       windVelocity: params.windVelocity,
       windDensity: params.windDensity,
@@ -1066,6 +1068,24 @@ const Ton618Observatory = () => {
                     className="mt-2"
                   />
                   <p className="text-xs text-gray-500 mt-1">O-type: 30,000-50,000K</p>
+                </div>
+
+                <div>
+                  <Label className="text-gray-200 text-sm">Orbital Speed: {params.orbitalSpeedMultiplier.toFixed(2)}×</Label>
+                  <Slider
+                    value={[params.orbitalSpeedMultiplier]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, orbitalSpeedMultiplier: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ orbitalSpeedMultiplier: v[0] });
+                      }
+                    }}
+                    min={0.01}
+                    max={2.0}
+                    step={0.01}
+                    className="mt-2"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">0.01 = very slow, 1.0 = normal</p>
                 </div>
 
                 <div className="pt-2 border-t border-gray-600">

@@ -47,6 +47,7 @@ const Ton618Simulation = () => {
     companionStarDistance: 250,
     companionStarMass: 40,
     companionStarTemperature: 40000,
+    orbitalSpeedMultiplier: 0.1,
     // Stellar wind physics
     enableStellarWind: true,
     windVelocity: 2000,
@@ -609,6 +610,7 @@ const Ton618Simulation = () => {
       mass: params.companionStarMass,
       temperature: params.companionStarTemperature,
       orbitalRadius: params.companionStarDistance,
+      orbitalSpeedMultiplier: params.orbitalSpeedMultiplier,
       enableWind: params.enableStellarWind,
       windVelocity: params.windVelocity,
       windDensity: params.windDensity,
