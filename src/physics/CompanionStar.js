@@ -8,6 +8,8 @@ import * as THREE from 'three';
 export class CompanionStar {
   constructor(scene, blackHoleMass = 66e9, params = {}) {
     this.scene = scene;
+    // Note: blackHoleMass in simulation uses scaled units where 1e9 = 1 unit
+    // So 66e9 represents "66 billion solar mass equivalent" in scaled coordinates
     this.blackHoleMass = blackHoleMass;
 
     // Companion star properties (O-type supergiant defaults)
@@ -52,7 +54,13 @@ export class CompanionStar {
     this.quantumInstance = null;
     this.quantumData = [];
 
+    // Cached calculations (for performance - recalculated when orbital params change)
+    this.rocheRadius = null; // Will be calculated after orbital position is set
+
     this.updateOrbitalPosition();
+
+    // Calculate Roche radius after orbital position is established
+    this.rocheRadius = this.calculateRocheLobeRadius();
 
     // Visual
     this.mesh = null;
@@ -549,7 +557,8 @@ export class CompanionStar {
     const toStar = new THREE.Vector3().subVectors(this.position, particlePosition);
     const distanceToStar = toStar.length();
 
-    const rocheRadius = this.calculateRocheLobeRadius();
+    // Use cached Roche radius (much faster than recalculating per particle)
+    const rocheRadius = this.rocheRadius;
     const hillRadius = this.influenceRadius;
 
     return {
@@ -612,6 +621,7 @@ export class CompanionStar {
     if (params.mass !== undefined) {
       this.mass = params.mass;
       this.influenceRadius = this.calculateHillRadius();
+      this.rocheRadius = this.calculateRocheLobeRadius(); // Recalculate cached value
       if (this.influenceSphere) {
         this.influenceSphere.geometry.dispose();
         this.influenceSphere.geometry = new THREE.SphereGeometry(this.influenceRadius, 32, 32);
@@ -627,6 +637,7 @@ export class CompanionStar {
       this.orbitalRadius = params.orbitalRadius;
       this.orbitalVelocity = this.calculateOrbitalVelocity(this.orbitalRadius);
       this.influenceRadius = this.calculateHillRadius();
+      this.rocheRadius = this.calculateRocheLobeRadius(); // Recalculate cached value
       if (this.influenceSphere) {
         this.influenceSphere.geometry.dispose();
         this.influenceSphere.geometry = new THREE.SphereGeometry(this.influenceRadius, 32, 32);
