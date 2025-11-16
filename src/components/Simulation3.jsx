@@ -9,6 +9,7 @@ import StellarDebris from '../physics/StellarDebris';
 import OrbitalMechanics from '../physics/OrbitalMechanics';
 import LymanAlphaBlob from '../physics/LymanAlphaBlob';
 import CompanionStar from '../physics/CompanionStar';
+import HawkingRadiation from '../physics/HawkingRadiation';
 
 const Ton618Observatory = () => {
   const containerRef = useRef(null);
@@ -25,6 +26,7 @@ const Ton618Observatory = () => {
   const orbitalMechanicsRef = useRef(null);
   const lymanAlphaBlobRef = useRef(null);
   const companionStarRef = useRef(null);
+  const hawkingRadiationRef = useRef(null);
 
   // Light curve data
   const lightCurveDataRef = useRef({
@@ -392,6 +394,7 @@ const Ton618Observatory = () => {
     lymanAlphaBlob.setVisible(params.showLymanAlphaBlob);
 
     // Initialize companion star (massive O-type supergiant)
+    // Note: Quantum effects removed from star, now at black hole event horizon
     const companionStar = new CompanionStar(scene, TON618_MASS, {
       mass: params.companionStarMass,
       temperature: params.companionStarTemperature,
@@ -402,11 +405,18 @@ const Ton618Observatory = () => {
       windDensity: params.windDensity,
       enableGravity: params.enableGravitationalForce,
       gravitationalStrength: params.gravitationalStrength,
-      enableQuantumEffects: params.enableQuantumEffects,
-      hawkingRadiationIntensity: params.hawkingRadiationIntensity,
       showInfluenceSphere: params.showInfluenceSphere
     });
     companionStarRef.current = companionStar;
+
+    // Initialize Hawking radiation (quantum effects at black hole event horizon)
+    // This is where Hawking radiation actually occurs - NOT at stellar surfaces!
+    const hawkingRadiation = new HawkingRadiation(scene, TON618_MASS, EVENT_HORIZON, {
+      intensity: params.hawkingRadiationIntensity,
+      particleCount: 1000,
+      enabled: params.enableQuantumEffects
+    });
+    hawkingRadiationRef.current = hawkingRadiation;
 
     // Animation loop
     let time = 0;
@@ -640,14 +650,19 @@ const Ton618Observatory = () => {
         if (params.showCompanionStar && companionStar) {
           companionStar.update(deltaTime);
 
-          // Update star statistics
+          // Update star statistics (quantum particles now from Hawking radiation)
           const stats = companionStar.getStats();
           setStarStats({
             windParticleCount: stats.windParticleCount,
-            quantumParticleCount: stats.quantumParticleCount,
+            quantumParticleCount: hawkingRadiation ? hawkingRadiation.getStats().totalParticles : 0,
             influenceRadius: parseFloat(stats.influenceRadius),
             massLossRate: parseFloat(stats.massLossRate)
           });
+        }
+
+        // Update Hawking radiation (quantum effects at event horizon)
+        if (hawkingRadiation) {
+          hawkingRadiation.update(deltaTime);
         }
 
         // Update dynamic disk lights to track hot particles
@@ -735,6 +750,7 @@ const Ton618Observatory = () => {
       if (debris) debris.destroy();
       if (lymanAlphaBlob) lymanAlphaBlob.destroy();
       if (companionStar) companionStar.destroy();
+      if (hawkingRadiation) hawkingRadiation.destroy();
 
       container.removeChild(renderer.domElement);
       renderer.dispose();
@@ -1268,14 +1284,14 @@ const Ton618Observatory = () => {
                     variant={params.enableQuantumEffects ? "default" : "outline"}
                     onClick={() => {
                       setParams(p => ({ ...p, enableQuantumEffects: !p.enableQuantumEffects }));
-                      if (companionStarRef.current) {
-                        companionStarRef.current.setParameters({ enableQuantumEffects: !params.enableQuantumEffects });
+                      if (hawkingRadiationRef.current) {
+                        hawkingRadiationRef.current.setParameters({ enabled: !params.enableQuantumEffects });
                       }
                     }}
                     className="w-full text-xs justify-start mb-2"
                     size="sm"
                   >
-                    {params.enableQuantumEffects ? "✓" : "○"} Enable Quantum Effects
+                    {params.enableQuantumEffects ? "✓" : "○"} Enable Hawking Radiation
                   </Button>
 
                   {params.enableQuantumEffects && (
@@ -1285,8 +1301,8 @@ const Ton618Observatory = () => {
                         value={[params.hawkingRadiationIntensity]}
                         onValueChange={(v) => {
                           setParams(p => ({ ...p, hawkingRadiationIntensity: v[0] }));
-                          if (companionStarRef.current) {
-                            companionStarRef.current.setParameters({ hawkingRadiationIntensity: v[0] });
+                          if (hawkingRadiationRef.current) {
+                            hawkingRadiationRef.current.setParameters({ intensity: v[0] });
                           }
                         }}
                         min={0.1}
@@ -1294,7 +1310,7 @@ const Ton618Observatory = () => {
                         step={0.1}
                         className="mt-1"
                       />
-                      <p className="text-xs text-gray-500 mt-1">Pair creation rate</p>
+                      <p className="text-xs text-gray-500 mt-1">Particle/antiparticle pairs at event horizon</p>
                     </div>
                   )}
                 </div>
