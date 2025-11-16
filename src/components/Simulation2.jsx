@@ -805,15 +805,46 @@ const AdvancedAccretionPhysics = () => {
         for (let i = 0; i < diskData.length; i++) {
           const p = diskData[i];
           p.age++;
-          
+
           p.angle += p.speed * params.timeScale;
-          
+
           const distToISCO = p.radius - ISCO;
           const infallAcceleration = distToISCO < 10 ? (1 + (10 - distToISCO) * 0.3) : 1;
           p.radius -= p.infallSpeed * params.accretionRate * params.viscosity * infallAcceleration * params.timeScale;
-          
+
           totalInfallSpeed += p.infallSpeed * infallAcceleration;
-          
+
+          // Companion star gravitational/magnetic influence
+          if (params.showCompanionStar && companionStarRef.current) {
+            const particlePos = new THREE.Vector3(
+              Math.cos(p.angle) * p.radius,
+              p.height,
+              Math.sin(p.angle) * p.radius
+            );
+
+            const force = companionStarRef.current.getParticleForce(particlePos);
+
+            if (force.length() > 0) {
+              // Convert force to cylindrical coordinates
+              const toParticle = new THREE.Vector2(particlePos.x, particlePos.z);
+              const radialDir = toParticle.clone().normalize();
+              const tangentialDir = new THREE.Vector2(-radialDir.y, radialDir.x);
+
+              // Project force onto radial and tangential directions
+              const forceXZ = new THREE.Vector2(force.x, force.z);
+              const radialForce = forceXZ.dot(radialDir);
+              const tangentialForce = forceXZ.dot(tangentialDir);
+
+              // Apply forces (scaled for simulation stability)
+              p.radius += radialForce * 0.5 * params.timeScale;
+              p.angle += tangentialForce / (p.radius + 1) * 0.02 * params.timeScale;
+              p.height += force.y * 0.3 * params.timeScale;
+
+              // Clamp height to reasonable bounds
+              p.height = Math.max(-20, Math.min(20, p.height));
+            }
+          }
+
           // Vertical dynamics
           p.verticalPhase += 0.02 * params.timeScale * params.verticalMotion;
           const verticalOscillation = Math.sin(p.verticalPhase) * 3;
@@ -1380,11 +1411,12 @@ const AdvancedAccretionPhysics = () => {
                         companionStarRef.current.setParameters({ orbitalRadius: v[0] });
                       }
                     }}
-                    min={100}
+                    min={25}
                     max={500}
-                    step={10}
+                    step={5}
                     className="mt-1"
                   />
+                  <p className="text-xs text-gray-500 mt-1">Distance from black hole (ISCO≈18)</p>
                 </div>
 
                 <div>
@@ -1421,59 +1453,180 @@ const AdvancedAccretionPhysics = () => {
                   />
                 </div>
 
-                <div className="pt-2 mt-2 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-gray-200 text-xs">Stellar Wind</Label>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={() => {
-                        setParams(p => ({ ...p, enableStellarWind: !p.enableStellarWind }));
-                        if (companionStarRef.current) {
-                          companionStarRef.current.setParameters({ enableWind: !params.enableStellarWind });
-                        }
-                      }}
-                    >
-                      {params.enableStellarWind ? "✓ ON" : "○ OFF"}
-                    </Button>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label className="text-gray-200 text-xs">Gravity</Label>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={() => {
-                        setParams(p => ({ ...p, enableGravitationalForce: !p.enableGravitationalForce }));
-                        if (companionStarRef.current) {
-                          companionStarRef.current.setParameters({ enableGravity: !params.enableGravitationalForce });
-                        }
-                      }}
-                    >
-                      {params.enableGravitationalForce ? "✓ ON" : "○ OFF"}
-                    </Button>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label className="text-gray-200 text-xs">Quantum Effects</Label>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={() => {
-                        setParams(p => ({ ...p, enableQuantumEffects: !p.enableQuantumEffects }));
-                        if (companionStarRef.current) {
-                          companionStarRef.current.setParameters({ enableQuantumEffects: !params.enableQuantumEffects });
-                        }
-                      }}
-                    >
-                      {params.enableQuantumEffects ? "✓ ON" : "○ OFF"}
-                    </Button>
-                  </div>
-                  <div className="pt-1 border-t border-gray-700 text-[10px] space-y-0.5">
-                    <p className="text-gray-400">Wind: <span className="text-cyan-400">{starStats.windParticleCount}</span> | Quantum: <span className="text-green-400">{starStats.quantumParticleCount}</span></p>
-                    <p className="text-gray-400">Hill: <span className="text-purple-400">{starStats.influenceRadius}</span> | Loss: <span className="text-yellow-400">{starStats.massLossRate}</span></p>
-                  </div>
+                <div>
+                  <Label className="text-gray-200 text-xs">Orbital Speed: {params.orbitalSpeedMultiplier.toFixed(3)}×</Label>
+                  <Slider
+                    value={[params.orbitalSpeedMultiplier]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, orbitalSpeedMultiplier: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ orbitalSpeedMultiplier: v[0] });
+                      }
+                    }}
+                    min={0.001}
+                    max={2.0}
+                    step={0.001}
+                    className="mt-1"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">0.001 = ultra slow, 0.1 = slow, 1.0 = normal</p>
+                </div>
+
+                <div className="pt-2 border-t border-gray-600">
+                  <h4 className="text-xs font-bold text-cyan-300 mb-2">Stellar Wind Physics</h4>
+
+                  <Button
+                    variant={params.enableStellarWind ? "default" : "outline"}
+                    onClick={() => {
+                      setParams(p => ({ ...p, enableStellarWind: !p.enableStellarWind }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ enableWind: !params.enableStellarWind });
+                      }
+                    }}
+                    className="w-full text-xs justify-start mb-2"
+                    size="sm"
+                  >
+                    {params.enableStellarWind ? "✓" : "○"} Enable Stellar Wind
+                  </Button>
+
+                  {params.enableStellarWind && (
+                    <>
+                      <div>
+                        <Label className="text-gray-200 text-xs">Wind Velocity: {params.windVelocity} km/s</Label>
+                        <Slider
+                          value={[params.windVelocity]}
+                          onValueChange={(v) => {
+                            setParams(p => ({ ...p, windVelocity: v[0] }));
+                            if (companionStarRef.current) {
+                              companionStarRef.current.setParameters({ windVelocity: v[0] });
+                            }
+                          }}
+                          min={1000}
+                          max={3000}
+                          step={100}
+                          className="mt-1"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">O-type: 1000-3000 km/s</p>
+                      </div>
+
+                      <div>
+                        <Label className="text-gray-200 text-xs">Wind Density: {params.windDensity.toFixed(1)}×</Label>
+                        <Slider
+                          value={[params.windDensity]}
+                          onValueChange={(v) => {
+                            setParams(p => ({ ...p, windDensity: v[0] }));
+                            if (companionStarRef.current) {
+                              companionStarRef.current.setParameters({ windDensity: v[0] });
+                            }
+                          }}
+                          min={0.1}
+                          max={3.0}
+                          step={0.1}
+                          className="mt-1"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Mass loss rate</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-gray-600">
+                  <h4 className="text-xs font-bold text-purple-300 mb-2">Gravitational Influence</h4>
+
+                  <Button
+                    variant={params.enableGravitationalForce ? "default" : "outline"}
+                    onClick={() => {
+                      setParams(p => ({ ...p, enableGravitationalForce: !p.enableGravitationalForce }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ enableGravity: !params.enableGravitationalForce });
+                      }
+                    }}
+                    className="w-full text-xs justify-start mb-2"
+                    size="sm"
+                  >
+                    {params.enableGravitationalForce ? "✓" : "○"} Enable Gravity
+                  </Button>
+
+                  {params.enableGravitationalForce && (
+                    <>
+                      <div>
+                        <Label className="text-gray-200 text-xs">Gravity Strength: {params.gravitationalStrength.toFixed(1)}×</Label>
+                        <Slider
+                          value={[params.gravitationalStrength]}
+                          onValueChange={(v) => {
+                            setParams(p => ({ ...p, gravitationalStrength: v[0] }));
+                            if (companionStarRef.current) {
+                              companionStarRef.current.setParameters({ gravitationalStrength: v[0] });
+                            }
+                          }}
+                          min={0.1}
+                          max={5.0}
+                          step={0.1}
+                          className="mt-1"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Attraction force multiplier</p>
+                      </div>
+
+                      <Button
+                        variant={params.showInfluenceSphere ? "default" : "outline"}
+                        onClick={() => {
+                          setParams(p => ({ ...p, showInfluenceSphere: !p.showInfluenceSphere }));
+                          if (companionStarRef.current) {
+                            companionStarRef.current.setParameters({ showInfluenceSphere: !params.showInfluenceSphere });
+                          }
+                        }}
+                        className="w-full text-xs justify-start"
+                        size="sm"
+                      >
+                        {params.showInfluenceSphere ? "✓" : "○"} Show Hill Sphere
+                      </Button>
+                    </>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-gray-600">
+                  <h4 className="text-xs font-bold text-green-300 mb-2">Quantum Effects</h4>
+
+                  <Button
+                    variant={params.enableQuantumEffects ? "default" : "outline"}
+                    onClick={() => {
+                      setParams(p => ({ ...p, enableQuantumEffects: !p.enableQuantumEffects }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ enableQuantumEffects: !params.enableQuantumEffects });
+                      }
+                    }}
+                    className="w-full text-xs justify-start mb-2"
+                    size="sm"
+                  >
+                    {params.enableQuantumEffects ? "✓" : "○"} Enable Quantum Effects
+                  </Button>
+
+                  {params.enableQuantumEffects && (
+                    <div>
+                      <Label className="text-gray-200 text-xs">Intensity: {params.hawkingRadiationIntensity.toFixed(1)}×</Label>
+                      <Slider
+                        value={[params.hawkingRadiationIntensity]}
+                        onValueChange={(v) => {
+                          setParams(p => ({ ...p, hawkingRadiationIntensity: v[0] }));
+                          if (companionStarRef.current) {
+                            companionStarRef.current.setParameters({ hawkingRadiationIntensity: v[0] });
+                          }
+                        }}
+                        min={0.1}
+                        max={2.0}
+                        step={0.1}
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Pair creation rate</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-gray-600 text-xs">
+                  <h4 className="text-xs font-semibold text-white mb-1">Star Statistics</h4>
+                  <p className="text-gray-400">Wind Particles: <span className="text-cyan-400">{starStats.windParticleCount}</span></p>
+                  <p className="text-gray-400">Quantum Particles: <span className="text-green-400">{starStats.quantumParticleCount}</span></p>
+                  <p className="text-gray-400">Hill Radius: <span className="text-purple-400">{starStats.influenceRadius} units</span></p>
+                  <p className="text-gray-400">Mass Loss: <span className="text-yellow-400">{starStats.massLossRate} M☉/yr</span></p>
                 </div>
               </div>
             )}

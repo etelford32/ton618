@@ -530,6 +530,43 @@ export class CompanionStar {
   }
 
   /**
+   * Calculate Roche lobe radius for this star in the binary system
+   * Simplified Eggleton approximation: r_L ≈ 0.49 * a * q^(2/3) / (0.6 * q^(2/3) + ln(1 + q^(1/3)))
+   * where q = M_star / M_BH and a = orbital separation
+   */
+  calculateRocheLobeRadius() {
+    const q = this.mass / (this.blackHoleMass / 1e9); // Mass ratio (star/BH in solar masses)
+    const numerator = 0.49 * Math.pow(q, 2/3);
+    const denominator = 0.6 * Math.pow(q, 2/3) + Math.log(1 + Math.pow(q, 1/3));
+    return this.orbitalRadius * (numerator / denominator);
+  }
+
+  /**
+   * Check if particle is within the star's Roche lobe (i.e., gravitationally bound to star)
+   * Also returns the influence strength (0-1) based on distance
+   */
+  getParticleInfluence(particlePosition) {
+    const toStar = new THREE.Vector3().subVectors(this.position, particlePosition);
+    const distanceToStar = toStar.length();
+
+    const rocheRadius = this.calculateRocheLobeRadius();
+    const hillRadius = this.influenceRadius;
+
+    return {
+      isWithinRocheLobe: distanceToStar < rocheRadius,
+      isWithinHillSphere: distanceToStar < hillRadius,
+      distanceToStar: distanceToStar,
+      rocheRadius: rocheRadius,
+      hillRadius: hillRadius,
+      // Influence strength (1.0 at star surface, 0.0 at Hill sphere boundary)
+      influenceStrength: Math.max(0, 1 - (distanceToStar / hillRadius)),
+      // Capture strength (1.0 within Roche lobe, fades to 0 at Hill sphere)
+      captureStrength: distanceToStar < rocheRadius ? 1.0 :
+                       distanceToStar < hillRadius ? (hillRadius - distanceToStar) / (hillRadius - rocheRadius) : 0
+    };
+  }
+
+  /**
    * Update star orbit and visuals
    */
   update(deltaTime = 0.016) {
