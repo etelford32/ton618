@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import CompanionStar from '../physics/CompanionStar';
 
 const AdvancedAccretionPhysics = () => {
   const containerRef = useRef(null);
@@ -19,6 +20,7 @@ const AdvancedAccretionPhysics = () => {
   const shockWavesRef = useRef([]);
   const magneticFieldRef = useRef([]);
   const cameraAngleRef = useRef({ theta: Math.PI / 4, phi: Math.PI / 3 });
+  const companionStarRef = useRef(null);
   
   const [params, setParams] = useState({
     blackHoleMass: 66,
@@ -41,7 +43,12 @@ const AdvancedAccretionPhysics = () => {
     showFrameDragging: true,
     showSpaghettification: true,
     showPhotonOrbiters: true,
-    timeScale: 1.0
+    timeScale: 1.0,
+    // Companion star parameters
+    showCompanionStar: true,
+    companionStarDistance: 250,
+    companionStarMass: 40,
+    companionStarTemperature: 40000
   });
 
   const [isPlaying, setIsPlaying] = useState(true);
@@ -129,7 +136,9 @@ const AdvancedAccretionPhysics = () => {
         Math.sin(angle) * radius
       );
       diskInstance.setMatrixAt(i, tempMatrix);
-      diskInstance.setColorAt(i, tempColor.setHSL(0.6, 1, 0.4));
+      // Initial blackbody color
+      tempColor.setRGB(1.0, 0.7, 0.4).multiplyScalar(1.0);
+      diskInstance.setColorAt(i, tempColor);
     }
     
     diskInstance.instanceMatrix.needsUpdate = true;
@@ -400,14 +409,43 @@ const AdvancedAccretionPhysics = () => {
 
     // ACCRETION DISK
     const particleCount = 35000;
-    const diskGeometry = new THREE.SphereGeometry(0.4, 8, 8);
-    const diskMaterial = new THREE.MeshPhongMaterial({
+    const diskGeometry = new THREE.SphereGeometry(0.15, 8, 8);
+
+    // Shader material for self-emissive glow
+    const diskMaterial = new THREE.ShaderMaterial({
       transparent: true,
-      shininess: 150,
-      emissive: new THREE.Color(0x000000),
-      emissiveIntensity: 0
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      uniforms: {
+        baseColor: { value: new THREE.Color(1, 1, 1) }
+      },
+      vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vColor;
+
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          vColor = instanceColor;
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vNormal;
+        varying vec3 vColor;
+
+        void main() {
+          // Fresnel glow effect (brighter at edges)
+          float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0, 0, 1))), 2.0);
+          float glow = 0.6 + fresnel * 0.8;
+
+          // Temperature-based emission
+          vec3 emissive = vColor * glow * 2.0;
+
+          gl_FragColor = vec4(emissive, 0.9);
+        }
+      `
     });
-    
+
     const diskInstance = new THREE.InstancedMesh(diskGeometry, diskMaterial, particleCount);
     diskInstance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(diskInstance);
@@ -448,7 +486,9 @@ const AdvancedAccretionPhysics = () => {
         Math.sin(angle) * radius
       );
       diskInstance.setMatrixAt(i, tempMatrix);
-      diskInstance.setColorAt(i, tempColor.setHSL(0.6, 1, 0.4));
+      // Initial blackbody color
+      tempColor.setRGB(1.0, 0.7, 0.4).multiplyScalar(1.0);
+      diskInstance.setColorAt(i, tempColor);
     }
     
     diskDataRef.current = diskData;
@@ -485,6 +525,15 @@ const AdvancedAccretionPhysics = () => {
     
     const stars = new THREE.Points(starsGeometry, starsMaterial);
     scene.add(stars);
+
+    // Initialize companion star (massive O-type supergiant)
+    const blackHoleMass = 66e9; // 66 billion solar masses
+    const companionStar = new CompanionStar(scene, blackHoleMass, {
+      mass: params.companionStarMass,
+      temperature: params.companionStarTemperature,
+      orbitalRadius: params.companionStarDistance
+    });
+    companionStarRef.current = companionStar;
 
     // Mouse controls
     let isDragging = false;
@@ -898,19 +947,26 @@ const AdvancedAccretionPhysics = () => {
           
           diskInstance.setMatrixAt(i, updateMatrix);
           
-          // Color
-          if (p.temp > 1.0) {
-            updateColor.setRGB(1, 1, 1);
-          } else if (p.temp > 0.8) {
-            updateColor.setRGB(1, 1, 0.8 + p.temp * 0.2);
+          // Blackbody temperature colors
+          const brightness = 0.5 + p.brightness * 0.5;
+
+          if (p.temp > 1.0 || p.temp > 0.8) {
+            // Very hot - blue-white (10000K+)
+            updateColor.setRGB(0.8, 0.9, 1.0).multiplyScalar(1.5 + brightness);
           } else if (p.temp > 0.6) {
-            updateColor.setRGB(1, 0.9, 0.3 + p.temp * 0.5);
+            // Hot - white (6000-10000K)
+            updateColor.setRGB(1.0, 1.0, 0.95).multiplyScalar(1.3 + brightness);
           } else if (p.temp > 0.4) {
-            updateColor.setRGB(1, 0.5 + p.temp * 0.4, 0.2);
+            // Warm - yellow-white (4000-6000K)
+            updateColor.setRGB(1.0, 0.95, 0.7).multiplyScalar(1.2 + brightness * 0.8);
+          } else if (p.temp > 0.2) {
+            // Cool - orange (3000-4000K)
+            updateColor.setRGB(1.0, 0.7, 0.4).multiplyScalar(1.0 + brightness * 0.6);
           } else {
-            updateColor.setRGB(1, 0.3 + p.temp * 0.3, 0.1);
+            // Very cool - red (2000-3000K)
+            updateColor.setRGB(1.0, 0.5, 0.2).multiplyScalar(0.8 + brightness * 0.4);
           }
-          
+
           diskInstance.setColorAt(i, updateColor);
         }
         
@@ -939,6 +995,11 @@ const AdvancedAccretionPhysics = () => {
       camera.position.z = distance * Math.sin(cameraAngleRef.current.phi) * Math.sin(cameraAngleRef.current.theta);
       camera.lookAt(0, 0, 0);
 
+      // Update companion star
+      if (params.showCompanionStar && companionStar) {
+        companionStar.update(deltaTime);
+      }
+
       renderer.render(scene, camera);
     };
 
@@ -962,6 +1023,10 @@ const AdvancedAccretionPhysics = () => {
       jetParticlesRef.current.forEach(jet => { if (jet.mesh) scene.remove(jet.mesh); });
       photonOrbitersRef.current.forEach(photon => { if (photon.mesh) scene.remove(photon.mesh); });
       shockWavesRef.current.forEach(wave => scene.remove(wave));
+
+      // Cleanup companion star
+      if (companionStar) companionStar.destroy();
+
       container.removeChild(renderer.domElement);
       renderer.dispose();
     };
@@ -1254,6 +1319,74 @@ const AdvancedAccretionPhysics = () => {
             >
               {params.showSpaghettification ? "✓" : "○"} Spaghettification
             </Button>
+          </div>
+
+          <div className="pt-3 border-t border-gray-700">
+            <h3 className="font-semibold text-white mb-3 text-sm">Companion Star (O-type)</h3>
+
+            <Button
+              variant={params.showCompanionStar ? "default" : "outline"}
+              onClick={() => setParams(p => ({ ...p, showCompanionStar: !p.showCompanionStar }))}
+              className="w-full text-xs mb-3"
+              size="sm"
+            >
+              {params.showCompanionStar ? "✓" : "○"} Show Companion Star
+            </Button>
+
+            {params.showCompanionStar && (
+              <div className="space-y-3">
+                <div>
+                  <Label className="text-gray-200 text-xs">Orbital Distance: {params.companionStarDistance}</Label>
+                  <Slider
+                    value={[params.companionStarDistance]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarDistance: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ orbitalRadius: v[0] });
+                      }
+                    }}
+                    min={100}
+                    max={500}
+                    step={10}
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-gray-200 text-xs">Star Mass: {params.companionStarMass} M☉</Label>
+                  <Slider
+                    value={[params.companionStarMass]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarMass: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ mass: v[0] });
+                      }
+                    }}
+                    min={15}
+                    max={90}
+                    step={5}
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-gray-200 text-xs">Temperature: {params.companionStarTemperature.toLocaleString()} K</Label>
+                  <Slider
+                    value={[params.companionStarTemperature]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarTemperature: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ temperature: v[0] });
+                      }
+                    }}
+                    min={30000}
+                    max={50000}
+                    step={1000}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="pt-3 border-t border-gray-700 text-xs text-gray-400">

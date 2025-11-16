@@ -8,6 +8,7 @@ import Star from '../physics/Star';
 import StellarDebris from '../physics/StellarDebris';
 import OrbitalMechanics from '../physics/OrbitalMechanics';
 import LymanAlphaBlob from '../physics/LymanAlphaBlob';
+import CompanionStar from '../physics/CompanionStar';
 
 const Ton618Observatory = () => {
   const containerRef = useRef(null);
@@ -23,6 +24,7 @@ const Ton618Observatory = () => {
   const debrisRef = useRef(null);
   const orbitalMechanicsRef = useRef(null);
   const lymanAlphaBlobRef = useRef(null);
+  const companionStarRef = useRef(null);
 
   // Light curve data
   const lightCurveDataRef = useRef({
@@ -50,7 +52,16 @@ const Ton618Observatory = () => {
     // Advanced physics
     enableGravity: true,
     showLymanAlphaBlob: true,
-    blobIntensity: 1.0
+    blobIntensity: 1.0,
+    // Companion star parameters
+    showCompanionStar: true,
+    companionStarDistance: 250,
+    companionStarMass: 40, // Solar masses
+    companionStarTemperature: 40000, // Kelvin
+    companionStarVelocity: 0, // Will be calculated
+    // Black hole parameters
+    blackHoleMass: 66, // billions of solar masses
+    blackHoleSpin: 0.9 // 0 to 1
   });
 
   const [tdeStats, setTdeStats] = useState({
@@ -362,6 +373,14 @@ const Ton618Observatory = () => {
     lymanAlphaBlobRef.current = lymanAlphaBlob;
     lymanAlphaBlob.setVisible(params.showLymanAlphaBlob);
 
+    // Initialize companion star (massive O-type supergiant)
+    const companionStar = new CompanionStar(scene, TON618_MASS, {
+      mass: params.companionStarMass,
+      temperature: params.companionStarTemperature,
+      orbitalRadius: params.companionStarDistance
+    });
+    companionStarRef.current = companionStar;
+
     // Animation loop
     let time = 0;
     let lastTime = performance.now();
@@ -529,6 +548,11 @@ const Ton618Observatory = () => {
           totalLuminosity.optical += blobStatsData.avgIonization * 0.3;
         }
 
+        // Update companion star
+        if (params.showCompanionStar && companionStar) {
+          companionStar.update(deltaTime);
+        }
+
         // Update dynamic disk lights to track hot particles
         diskLights.forEach((light, index) => {
           // Find hot particles in different regions
@@ -613,6 +637,7 @@ const Ton618Observatory = () => {
       if (star) star.destroy();
       if (debris) debris.destroy();
       if (lymanAlphaBlob) lymanAlphaBlob.destroy();
+      if (companionStar) companionStar.destroy();
 
       container.removeChild(renderer.domElement);
       renderer.dispose();
@@ -940,6 +965,107 @@ const Ton618Observatory = () => {
               </div>
             </div>
           )}
+
+          <div className="pt-3 border-t border-gray-700 space-y-3">
+            <h3 className="text-sm font-bold text-gray-300">Companion Star (O-type)</h3>
+
+            <Button
+              variant={params.showCompanionStar ? "default" : "outline"}
+              onClick={() => setParams(p => ({ ...p, showCompanionStar: !p.showCompanionStar }))}
+              className="w-full text-xs justify-start"
+              size="sm"
+            >
+              {params.showCompanionStar ? "✓" : "○"} Show Companion Star
+            </Button>
+
+            {params.showCompanionStar && (
+              <>
+                <div>
+                  <Label className="text-gray-200 text-sm">Orbital Distance: {params.companionStarDistance}</Label>
+                  <Slider
+                    value={[params.companionStarDistance]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarDistance: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ orbitalRadius: v[0] });
+                      }
+                    }}
+                    min={100}
+                    max={500}
+                    step={10}
+                    className="mt-2"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Distance from black hole</p>
+                </div>
+
+                <div>
+                  <Label className="text-gray-200 text-sm">Star Mass: {params.companionStarMass} M☉</Label>
+                  <Slider
+                    value={[params.companionStarMass]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarMass: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ mass: v[0] });
+                      }
+                    }}
+                    min={15}
+                    max={90}
+                    step={5}
+                    className="mt-2"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">O-type supergiant: 15-90 M☉</p>
+                </div>
+
+                <div>
+                  <Label className="text-gray-200 text-sm">Temperature: {params.companionStarTemperature.toLocaleString()} K</Label>
+                  <Slider
+                    value={[params.companionStarTemperature]}
+                    onValueChange={(v) => {
+                      setParams(p => ({ ...p, companionStarTemperature: v[0] }));
+                      if (companionStarRef.current) {
+                        companionStarRef.current.setParameters({ temperature: v[0] });
+                      }
+                    }}
+                    min={30000}
+                    max={50000}
+                    step={1000}
+                    className="mt-2"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">O-type: 30,000-50,000K</p>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-gray-700 space-y-3">
+            <h3 className="text-sm font-bold text-gray-300">Black Hole Parameters</h3>
+
+            <div>
+              <Label className="text-gray-200 text-sm">Mass: {params.blackHoleMass} billion M☉</Label>
+              <Slider
+                value={[params.blackHoleMass]}
+                onValueChange={(v) => setParams(p => ({ ...p, blackHoleMass: v[0] }))}
+                min={10}
+                max={100}
+                step={1}
+                className="mt-2"
+              />
+              <p className="text-xs text-gray-500 mt-1">TON 618 actual: 66 billion M☉</p>
+            </div>
+
+            <div>
+              <Label className="text-gray-200 text-sm">Spin Parameter: {params.blackHoleSpin.toFixed(2)}</Label>
+              <Slider
+                value={[params.blackHoleSpin]}
+                onValueChange={(v) => setParams(p => ({ ...p, blackHoleSpin: v[0] }))}
+                min={0}
+                max={1}
+                step={0.05}
+                className="mt-2"
+              />
+              <p className="text-xs text-gray-500 mt-1">0 = no rotation, 1 = maximum</p>
+            </div>
+          </div>
 
           <div className="pt-3 border-t border-gray-700 text-xs text-gray-400 space-y-2">
             <h3 className="font-semibold text-white mb-2">About TON 618</h3>
