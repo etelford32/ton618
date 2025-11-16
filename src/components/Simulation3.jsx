@@ -454,6 +454,38 @@ const Ton618Observatory = () => {
           // Infall
           p.radius -= p.infallSpeed * params.accretionRate;
 
+          // Apply companion star gravitational/magnetic influence
+          if (params.showCompanionStar && companionStar) {
+            const particlePos = new THREE.Vector3(
+              Math.cos(p.angle) * p.radius,
+              p.height,
+              Math.sin(p.angle) * p.radius
+            );
+
+            const force = companionStar.getParticleForce(particlePos);
+
+            // Apply force to particle motion
+            if (force.length() > 0) {
+              // Convert force to cylindrical coordinates
+              const toParticle = new THREE.Vector2(particlePos.x, particlePos.z);
+              const radialDir = toParticle.clone().normalize();
+              const tangentialDir = new THREE.Vector2(-radialDir.y, radialDir.x);
+
+              // Project force onto radial and tangential directions
+              const forceXZ = new THREE.Vector2(force.x, force.z);
+              const radialForce = forceXZ.dot(radialDir);
+              const tangentialForce = forceXZ.dot(tangentialDir);
+
+              // Apply forces (scaled for simulation stability)
+              p.radius += radialForce * 0.5;
+              p.angle += tangentialForce / (p.radius + 1) * 0.02;
+              p.height += force.y * 0.3;
+
+              // Clamp height to reasonable bounds
+              p.height = Math.max(-10, Math.min(10, p.height));
+            }
+          }
+
           // Variability
           p.phase += 0.02;
           const variability = 1 + Math.sin(p.phase + time * 2) * params.variabilityAmplitude;
@@ -1026,12 +1058,12 @@ const Ton618Observatory = () => {
                         companionStarRef.current.setParameters({ orbitalRadius: v[0] });
                       }
                     }}
-                    min={100}
+                    min={25}
                     max={500}
-                    step={10}
+                    step={5}
                     className="mt-2"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Distance from black hole</p>
+                  <p className="text-xs text-gray-500 mt-1">Distance from black hole (ISCO=18)</p>
                 </div>
 
                 <div>
@@ -1071,7 +1103,7 @@ const Ton618Observatory = () => {
                 </div>
 
                 <div>
-                  <Label className="text-gray-200 text-sm">Orbital Speed: {params.orbitalSpeedMultiplier.toFixed(2)}×</Label>
+                  <Label className="text-gray-200 text-sm">Orbital Speed: {params.orbitalSpeedMultiplier.toFixed(3)}×</Label>
                   <Slider
                     value={[params.orbitalSpeedMultiplier]}
                     onValueChange={(v) => {
@@ -1080,12 +1112,12 @@ const Ton618Observatory = () => {
                         companionStarRef.current.setParameters({ orbitalSpeedMultiplier: v[0] });
                       }
                     }}
-                    min={0.01}
+                    min={0.001}
                     max={2.0}
-                    step={0.01}
+                    step={0.001}
                     className="mt-2"
                   />
-                  <p className="text-xs text-gray-500 mt-1">0.01 = very slow, 1.0 = normal</p>
+                  <p className="text-xs text-gray-500 mt-1">0.001 = ultra slow, 0.1 = slow, 1.0 = normal</p>
                 </div>
 
                 <div className="pt-2 border-t border-gray-600">
