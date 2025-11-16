@@ -436,6 +436,13 @@ const Ton618Observatory = () => {
         const updateMatrix = new THREE.Matrix4();
         const updateColor = new THREE.Color();
 
+        // Reusable vectors to avoid per-frame allocations (performance optimization)
+        const reusableParticlePos = new THREE.Vector3();
+        const reusableToParticle = new THREE.Vector2();
+        const reusableRadialDir = new THREE.Vector2();
+        const reusableTangentialDir = new THREE.Vector2();
+        const reusableForceXZ = new THREE.Vector2();
+
         let totalLuminosity = {
           radio: 0,
           infrared: 0,
@@ -457,28 +464,29 @@ const Ton618Observatory = () => {
           // Apply companion star gravitational/magnetic influence
           let starInfluence = null;
           if (params.showCompanionStar && companionStar) {
-            const particlePos = new THREE.Vector3(
+            // Reuse vector instead of allocating new one
+            reusableParticlePos.set(
               Math.cos(p.angle) * p.radius,
               p.height,
               Math.sin(p.angle) * p.radius
             );
 
             // Get influence data (Roche lobe, Hill sphere, etc.)
-            starInfluence = companionStar.getParticleInfluence(particlePos);
+            starInfluence = companionStar.getParticleInfluence(reusableParticlePos);
 
-            const force = companionStar.getParticleForce(particlePos);
+            const force = companionStar.getParticleForce(reusableParticlePos);
 
             // Apply force to particle motion
             if (force.length() > 0) {
-              // Convert force to cylindrical coordinates
-              const toParticle = new THREE.Vector2(particlePos.x, particlePos.z);
-              const radialDir = toParticle.clone().normalize();
-              const tangentialDir = new THREE.Vector2(-radialDir.y, radialDir.x);
+              // Convert force to cylindrical coordinates (reuse vectors)
+              reusableToParticle.set(reusableParticlePos.x, reusableParticlePos.z);
+              reusableRadialDir.copy(reusableToParticle).normalize();
+              reusableTangentialDir.set(-reusableRadialDir.y, reusableRadialDir.x);
 
               // Project force onto radial and tangential directions
-              const forceXZ = new THREE.Vector2(force.x, force.z);
-              const radialForce = forceXZ.dot(radialDir);
-              const tangentialForce = forceXZ.dot(tangentialDir);
+              reusableForceXZ.set(force.x, force.z);
+              const radialForce = reusableForceXZ.dot(reusableRadialDir);
+              const tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
 
               // Apply forces (scaled for simulation stability)
               // Stronger effect when within Roche lobe
