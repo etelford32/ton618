@@ -4,6 +4,8 @@ import { Card } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import Star from '../physics/Star';
+import StellarDebris from '../physics/StellarDebris';
 
 const Ton618Observatory = () => {
   const containerRef = useRef(null);
@@ -13,6 +15,10 @@ const Ton618Observatory = () => {
   const animationRef = useRef(null);
   const diskInstanceRef = useRef(null);
   const cameraAngleRef = useRef({ theta: Math.PI / 4, phi: Math.PI / 3 });
+
+  // TDE (Tidal Disruption Event) refs
+  const starRef = useRef(null);
+  const debrisRef = useRef(null);
 
   // Light curve data
   const lightCurveDataRef = useRef({
@@ -32,7 +38,18 @@ const Ton618Observatory = () => {
     cameraDistance: 200,
     showJets: true,
     showDisk: true,
-    showLightCurves: true
+    showLightCurves: true,
+    // TDE parameters
+    showTDE: true,
+    starMass: 1.0,
+    starVelocity: 0.5
+  });
+
+  const [tdeStats, setTdeStats] = useState({
+    starHealth: 1.0,
+    debrisCount: 0,
+    streamCount: 0,
+    diskCount: 0
   });
 
   const [isPlaying, setIsPlaying] = useState(true);
@@ -274,6 +291,13 @@ const Ton618Observatory = () => {
     renderer.domElement.addEventListener('mouseup', onMouseUp);
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
+    // Initialize TDE (Tidal Disruption Event)
+    const star = new Star(scene, TON618_MASS);
+    starRef.current = star;
+
+    const debris = new StellarDebris(scene, TON618_MASS);
+    debrisRef.current = debris;
+
     // Animation loop
     let time = 0;
     let lastTime = performance.now();
@@ -376,6 +400,36 @@ const Ton618Observatory = () => {
           if (data.length > maxPoints) data.shift();
         });
 
+        // Update TDE (Tidal Disruption Event)
+        if (params.showTDE && star && debris) {
+          star.update(deltaTime);
+
+          // Check if star should be disrupted
+          if (star.shouldDisrupt()) {
+            const starState = star.getState();
+            debris.generateDebrisFromStar(starState);
+          }
+
+          debris.update(deltaTime);
+
+          // Update TDE stats
+          const debrisStats = debris.getStats();
+          setTdeStats({
+            starHealth: star.health,
+            debrisCount: debrisStats.total,
+            streamCount: debrisStats.inStream,
+            diskCount: debrisStats.inDisk
+          });
+
+          // Add debris contribution to light curves
+          const debrisTemp = debrisStats.avgTemperature;
+          if (debrisStats.total > 0) {
+            totalLuminosity.xray += debrisTemp * debrisStats.total * 0.001;
+            totalLuminosity.ultraviolet += debrisTemp * debrisStats.total * 0.0008;
+            totalLuminosity.optical += debrisStats.total * 0.0005;
+          }
+        }
+
         // Animate jets
         jetUpper.visible = params.showJets;
         jetLower.visible = params.showJets;
@@ -424,6 +478,10 @@ const Ton618Observatory = () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
+      // Cleanup TDE
+      if (star) star.destroy();
+      if (debris) debris.destroy();
+
       container.removeChild(renderer.domElement);
       renderer.dispose();
     };
@@ -540,6 +598,25 @@ const Ton618Observatory = () => {
               <p className="text-gray-300">FPS:</p>
               <p className="text-green-400 font-mono">{fps}</p>
             </div>
+
+            {params.showTDE && (
+              <div className="mt-3 pt-3 border-t border-blue-500/30">
+                <p className="text-blue-400 font-semibold mb-2">Tidal Disruption Event</p>
+                <div className="grid grid-cols-2 gap-x-4">
+                  <p className="text-gray-300">Star Health:</p>
+                  <p className="text-yellow-400 font-mono">{(tdeStats.starHealth * 100).toFixed(0)}%</p>
+
+                  <p className="text-gray-300">Debris:</p>
+                  <p className="text-orange-400 font-mono">{tdeStats.debrisCount}</p>
+
+                  <p className="text-gray-300">In Stream:</p>
+                  <p className="text-cyan-400 font-mono">{tdeStats.streamCount}</p>
+
+                  <p className="text-gray-300">In Disk:</p>
+                  <p className="text-purple-400 font-mono">{tdeStats.diskCount}</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -673,7 +750,64 @@ const Ton618Observatory = () => {
             >
               {params.showLightCurves ? "✓" : "○"} Light Curves
             </Button>
+
+            <Button
+              variant={params.showTDE ? "default" : "outline"}
+              onClick={() => setParams(p => ({ ...p, showTDE: !p.showTDE }))}
+              className="w-full text-xs justify-start"
+              size="sm"
+            >
+              {params.showTDE ? "✓" : "○"} Tidal Disruption Event
+            </Button>
           </div>
+
+          {params.showTDE && (
+            <div className="pt-3 border-t border-gray-700 space-y-3">
+              <h3 className="text-sm font-bold text-gray-300">TDE Controls</h3>
+
+              <Button
+                onClick={() => {
+                  if (starRef.current && debrisRef.current) {
+                    starRef.current.reset(
+                      new THREE.Vector3(300, 0, 0),
+                      new THREE.Vector3(-params.starVelocity, 0, params.starVelocity * 0.6)
+                    );
+                    debrisRef.current.clear();
+                  }
+                }}
+                className="w-full bg-orange-600 hover:bg-orange-700 text-xs"
+                size="sm"
+              >
+                🌟 Reset Star
+              </Button>
+
+              <div>
+                <Label className="text-gray-200 text-sm">Star Velocity: {params.starVelocity.toFixed(1)}</Label>
+                <Slider
+                  value={[params.starVelocity]}
+                  onValueChange={(v) => setParams(p => ({ ...p, starVelocity: v[0] }))}
+                  min={0.1}
+                  max={2}
+                  step={0.1}
+                  className="mt-2"
+                />
+                <p className="text-xs text-gray-500 mt-1">Initial approach velocity</p>
+              </div>
+
+              <div>
+                <Label className="text-gray-200 text-sm">Star Mass: {params.starMass.toFixed(1)} M☉</Label>
+                <Slider
+                  value={[params.starMass]}
+                  onValueChange={(v) => setParams(p => ({ ...p, starMass: v[0] }))}
+                  min={0.5}
+                  max={10}
+                  step={0.5}
+                  className="mt-2"
+                />
+                <p className="text-xs text-gray-500 mt-1">Larger stars disrupt farther out</p>
+              </div>
+            </div>
+          )}
 
           <div className="pt-3 border-t border-gray-700 text-xs text-gray-400 space-y-2">
             <h3 className="font-semibold text-white mb-2">About TON 618</h3>
