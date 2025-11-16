@@ -455,12 +455,16 @@ const Ton618Observatory = () => {
           p.radius -= p.infallSpeed * params.accretionRate;
 
           // Apply companion star gravitational/magnetic influence
+          let starInfluence = null;
           if (params.showCompanionStar && companionStar) {
             const particlePos = new THREE.Vector3(
               Math.cos(p.angle) * p.radius,
               p.height,
               Math.sin(p.angle) * p.radius
             );
+
+            // Get influence data (Roche lobe, Hill sphere, etc.)
+            starInfluence = companionStar.getParticleInfluence(particlePos);
 
             const force = companionStar.getParticleForce(particlePos);
 
@@ -477,9 +481,11 @@ const Ton618Observatory = () => {
               const tangentialForce = forceXZ.dot(tangentialDir);
 
               // Apply forces (scaled for simulation stability)
-              p.radius += radialForce * 0.5;
-              p.angle += tangentialForce / (p.radius + 1) * 0.02;
-              p.height += force.y * 0.3;
+              // Stronger effect when within Roche lobe
+              const forceMultiplier = starInfluence.isWithinRocheLobe ? 1.5 : 1.0;
+              p.radius += radialForce * 0.5 * forceMultiplier;
+              p.angle += tangentialForce / (p.radius + 1) * 0.02 * forceMultiplier;
+              p.height += force.y * 0.3 * forceMultiplier;
 
               // Clamp height to reasonable bounds
               p.height = Math.max(-10, Math.min(10, p.height));
@@ -541,6 +547,21 @@ const Ton618Observatory = () => {
           } else {
             // Very cool - red (2000-3000K)
             updateColor.setRGB(1.0, 0.5, 0.2).multiplyScalar(0.8 + brightness * 0.4);
+          }
+
+          // Add visual feedback for companion star influence
+          if (starInfluence && starInfluence.influenceStrength > 0.1) {
+            // Purple/magenta tint for particles under star's gravitational influence
+            const influenceColor = new THREE.Color(0.8, 0.3, 1.0); // Purple
+            const blendFactor = starInfluence.captureStrength * 0.4; // Max 40% blend
+
+            // Blend the temperature color with the influence color
+            updateColor.lerp(influenceColor, blendFactor);
+
+            // Extra brightness for captured particles (within Roche lobe)
+            if (starInfluence.isWithinRocheLobe) {
+              updateColor.multiplyScalar(1.2);
+            }
           }
 
           diskInstance.setColorAt(i, updateColor);
