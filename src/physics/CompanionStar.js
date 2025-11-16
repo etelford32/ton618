@@ -508,6 +508,7 @@ export class CompanionStar {
   /**
    * Check if particle is affected by stellar wind (repulsion)
    * Returns wind force vector
+   * Physics: Wind force is momentum flux = ρ × v² (not ρ × v)
    */
   calculateWindForce(particlePosition) {
     if (!this.enableWind) return new THREE.Vector3(0, 0, 0);
@@ -521,10 +522,11 @@ export class CompanionStar {
       return new THREE.Vector3(0, 0, 0);
     }
 
-    // Wind force decreases with distance (inverse square)
-    const windStrength = (this.windDensity * this.windVelocity) / (distance * distance + 1);
+    // Wind force is momentum flux: F = ρ × v² (quadratic with velocity)
+    // Force decreases with distance (inverse square law)
+    const windStrength = (this.windDensity * this.windVelocity * this.windVelocity) / (distance * distance + 1);
 
-    return fromStar.normalize().multiplyScalar(windStrength * 0.0001);
+    return fromStar.normalize().multiplyScalar(windStrength * 0.00001); // Adjusted scale for v²
   }
 
   /**
