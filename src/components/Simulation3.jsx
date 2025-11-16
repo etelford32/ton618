@@ -6,6 +6,8 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import Star from '../physics/Star';
 import StellarDebris from '../physics/StellarDebris';
+import OrbitalMechanics from '../physics/OrbitalMechanics';
+import LymanAlphaBlob from '../physics/LymanAlphaBlob';
 
 const Ton618Observatory = () => {
   const containerRef = useRef(null);
@@ -19,6 +21,8 @@ const Ton618Observatory = () => {
   // TDE (Tidal Disruption Event) refs
   const starRef = useRef(null);
   const debrisRef = useRef(null);
+  const orbitalMechanicsRef = useRef(null);
+  const lymanAlphaBlobRef = useRef(null);
 
   // Light curve data
   const lightCurveDataRef = useRef({
@@ -42,7 +46,11 @@ const Ton618Observatory = () => {
     // TDE parameters
     showTDE: true,
     starMass: 1.0,
-    starVelocity: 0.5
+    starVelocity: 0.5,
+    // Advanced physics
+    enableGravity: true,
+    showLymanAlphaBlob: true,
+    blobIntensity: 1.0
   });
 
   const [tdeStats, setTdeStats] = useState({
@@ -50,6 +58,12 @@ const Ton618Observatory = () => {
     debrisCount: 0,
     streamCount: 0,
     diskCount: 0
+  });
+
+  const [blobStats, setBlobStats] = useState({
+    particleCount: 0,
+    avgTemperature: 0,
+    avgIonization: 0
   });
 
   const [isPlaying, setIsPlaying] = useState(true);
@@ -339,6 +353,15 @@ const Ton618Observatory = () => {
     const debris = new StellarDebris(scene, TON618_MASS);
     debrisRef.current = debris;
 
+    // Initialize orbital mechanics
+    const orbitalMechanics = new OrbitalMechanics(TON618_MASS);
+    orbitalMechanicsRef.current = orbitalMechanics;
+
+    // Initialize Lyman-alpha blob
+    const lymanAlphaBlob = new LymanAlphaBlob(scene, TON618_MASS);
+    lymanAlphaBlobRef.current = lymanAlphaBlob;
+    lymanAlphaBlob.setVisible(params.showLymanAlphaBlob);
+
     // Animation loop
     let time = 0;
     let lastTime = performance.now();
@@ -488,6 +511,24 @@ const Ton618Observatory = () => {
           }
         }
 
+        // Update Lyman-alpha blob
+        if (params.showLymanAlphaBlob && lymanAlphaBlob) {
+          const quasarLuminosity = (totalLuminosity.optical + totalLuminosity.ultraviolet + totalLuminosity.xray) * params.blobIntensity;
+          lymanAlphaBlob.update(deltaTime, quasarLuminosity);
+
+          // Update blob stats
+          const blobStatsData = lymanAlphaBlob.getStats();
+          setBlobStats({
+            particleCount: blobStatsData.particleCount,
+            avgTemperature: blobStatsData.avgTemperature,
+            avgIonization: blobStatsData.avgIonization
+          });
+
+          // Lyman-alpha emission contribution to light curves
+          totalLuminosity.ultraviolet += blobStatsData.avgIonization * 0.5;
+          totalLuminosity.optical += blobStatsData.avgIonization * 0.3;
+        }
+
         // Update dynamic disk lights to track hot particles
         diskLights.forEach((light, index) => {
           // Find hot particles in different regions
@@ -571,6 +612,7 @@ const Ton618Observatory = () => {
       // Cleanup TDE
       if (star) star.destroy();
       if (debris) debris.destroy();
+      if (lymanAlphaBlob) lymanAlphaBlob.destroy();
 
       container.removeChild(renderer.domElement);
       renderer.dispose();
