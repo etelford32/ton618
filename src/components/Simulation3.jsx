@@ -6,6 +6,8 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import Star from '../physics/Star';
 import StellarDebris from '../physics/StellarDebris';
+import OrbitalMechanics from '../physics/OrbitalMechanics';
+import LymanAlphaBlob from '../physics/LymanAlphaBlob';
 
 const Ton618Observatory = () => {
   const containerRef = useRef(null);
@@ -19,6 +21,8 @@ const Ton618Observatory = () => {
   // TDE (Tidal Disruption Event) refs
   const starRef = useRef(null);
   const debrisRef = useRef(null);
+  const orbitalMechanicsRef = useRef(null);
+  const lymanAlphaBlobRef = useRef(null);
 
   // Light curve data
   const lightCurveDataRef = useRef({
@@ -42,7 +46,11 @@ const Ton618Observatory = () => {
     // TDE parameters
     showTDE: true,
     starMass: 1.0,
-    starVelocity: 0.5
+    starVelocity: 0.5,
+    // Advanced physics
+    enableGravity: true,
+    showLymanAlphaBlob: true,
+    blobIntensity: 1.0
   });
 
   const [tdeStats, setTdeStats] = useState({
@@ -50,6 +58,12 @@ const Ton618Observatory = () => {
     debrisCount: 0,
     streamCount: 0,
     diskCount: 0
+  });
+
+  const [blobStats, setBlobStats] = useState({
+    particleCount: 0,
+    avgTemperature: 0,
+    avgIonization: 0
   });
 
   const [isPlaying, setIsPlaying] = useState(true);
@@ -108,16 +122,26 @@ const Ton618Observatory = () => {
     rendererRef.current = renderer;
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0x0a0a20, 0.3);
+    const ambientLight = new THREE.AmbientLight(0x0a0a20, 0.2);
     scene.add(ambientLight);
 
-    const diskLight1 = new THREE.PointLight(0xff6600, 5, 300);
-    diskLight1.position.set(40, 0, 0);
-    scene.add(diskLight1);
+    // Dynamic disk lights (will track hot particles)
+    const diskLights = [];
+    for (let i = 0; i < 6; i++) {
+      const light = new THREE.PointLight(0xffffff, 8, 150);
+      light.position.set(
+        Math.cos(i * Math.PI / 3) * 30,
+        (Math.random() - 0.5) * 5,
+        Math.sin(i * Math.PI / 3) * 30
+      );
+      scene.add(light);
+      diskLights.push(light);
+    }
 
-    const diskLight2 = new THREE.PointLight(0x4466ff, 5, 300);
-    diskLight2.position.set(-40, 0, 0);
-    scene.add(diskLight2);
+    // Inner disk intense light
+    const innerDiskLight = new THREE.PointLight(0xaaccff, 12, 80);
+    innerDiskLight.position.set(0, 0, 0);
+    scene.add(innerDiskLight);
 
     const jetLight1 = new THREE.PointLight(0x00ffff, 4, 400);
     jetLight1.position.set(0, 120, 0);
@@ -156,12 +180,43 @@ const Ton618Observatory = () => {
     iscoRing.rotation.x = Math.PI / 2;
     scene.add(iscoRing);
 
-    // Accretion Disk
+    // Accretion Disk - smaller, glowing particles
     const particleCount = 25000;
-    const diskGeometry = new THREE.SphereGeometry(0.4, 8, 8);
-    const diskMaterial = new THREE.MeshPhongMaterial({
+    const diskGeometry = new THREE.SphereGeometry(0.15, 8, 8);
+
+    // Shader material for self-emissive glow
+    const diskMaterial = new THREE.ShaderMaterial({
       transparent: true,
-      shininess: 100
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      uniforms: {
+        baseColor: { value: new THREE.Color(1, 1, 1) }
+      },
+      vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vColor;
+
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          vColor = instanceColor;
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vNormal;
+        varying vec3 vColor;
+
+        void main() {
+          // Fresnel glow effect (brighter at edges)
+          float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0, 0, 1))), 2.0);
+          float glow = 0.6 + fresnel * 0.8;
+
+          // Temperature-based emission
+          vec3 emissive = vColor * glow * 2.0;
+
+          gl_FragColor = vec4(emissive, 0.9);
+        }
+      `
     });
 
     const diskInstance = new THREE.InstancedMesh(diskGeometry, diskMaterial, particleCount);
@@ -298,6 +353,15 @@ const Ton618Observatory = () => {
     const debris = new StellarDebris(scene, TON618_MASS);
     debrisRef.current = debris;
 
+    // Initialize orbital mechanics
+    const orbitalMechanics = new OrbitalMechanics(TON618_MASS);
+    orbitalMechanicsRef.current = orbitalMechanics;
+
+    // Initialize Lyman-alpha blob
+    const lymanAlphaBlob = new LymanAlphaBlob(scene, TON618_MASS);
+    lymanAlphaBlobRef.current = lymanAlphaBlob;
+    lymanAlphaBlob.setVisible(params.showLymanAlphaBlob);
+
     // Animation loop
     let time = 0;
     let lastTime = performance.now();
@@ -382,8 +446,25 @@ const Ton618Observatory = () => {
             totalLuminosity.radio += brightness * 1.0;
           }
 
-          // Color
-          updateColor.setHSL(0.6 - temp * 0.6, 1, 0.4 + temp * 0.4);
+          // Temperature-based color (blackbody radiation)
+          // Blue-white (hot) -> Yellow-orange -> Red (cool)
+          if (temp > 0.8) {
+            // Very hot - blue-white (10000K+)
+            updateColor.setRGB(0.8, 0.9, 1.0).multiplyScalar(1.5 + brightness);
+          } else if (temp > 0.6) {
+            // Hot - white (6000-10000K)
+            updateColor.setRGB(1.0, 1.0, 0.95).multiplyScalar(1.3 + brightness);
+          } else if (temp > 0.4) {
+            // Warm - yellow-white (4000-6000K)
+            updateColor.setRGB(1.0, 0.95, 0.7).multiplyScalar(1.2 + brightness * 0.8);
+          } else if (temp > 0.2) {
+            // Cool - orange (3000-4000K)
+            updateColor.setRGB(1.0, 0.7, 0.4).multiplyScalar(1.0 + brightness * 0.6);
+          } else {
+            // Very cool - red (2000-3000K)
+            updateColor.setRGB(1.0, 0.5, 0.2).multiplyScalar(0.8 + brightness * 0.4);
+          }
+
           diskInstance.setColorAt(i, updateColor);
         }
 
@@ -430,6 +511,62 @@ const Ton618Observatory = () => {
           }
         }
 
+        // Update Lyman-alpha blob
+        if (params.showLymanAlphaBlob && lymanAlphaBlob) {
+          const quasarLuminosity = (totalLuminosity.optical + totalLuminosity.ultraviolet + totalLuminosity.xray) * params.blobIntensity;
+          lymanAlphaBlob.update(deltaTime, quasarLuminosity);
+
+          // Update blob stats
+          const blobStatsData = lymanAlphaBlob.getStats();
+          setBlobStats({
+            particleCount: blobStatsData.particleCount,
+            avgTemperature: blobStatsData.avgTemperature,
+            avgIonization: blobStatsData.avgIonization
+          });
+
+          // Lyman-alpha emission contribution to light curves
+          totalLuminosity.ultraviolet += blobStatsData.avgIonization * 0.5;
+          totalLuminosity.optical += blobStatsData.avgIonization * 0.3;
+        }
+
+        // Update dynamic disk lights to track hot particles
+        diskLights.forEach((light, index) => {
+          // Find hot particles in different regions
+          const regionAngle = (index / diskLights.length) * Math.PI * 2;
+          let maxTemp = 0;
+          let hotParticle = null;
+
+          for (let i = 0; i < diskData.length; i++) {
+            const p = diskData[i];
+            const angleDiff = Math.abs(p.angle - regionAngle);
+            if (angleDiff < 1.0 && p.temp > maxTemp && p.radius < 50) {
+              maxTemp = p.temp;
+              hotParticle = p;
+            }
+          }
+
+          if (hotParticle) {
+            const x = Math.cos(hotParticle.angle) * hotParticle.radius;
+            const z = Math.sin(hotParticle.angle) * hotParticle.radius;
+            light.position.set(x, hotParticle.height, z);
+
+            // Color based on temperature
+            if (maxTemp > 0.8) {
+              light.color.setRGB(0.8, 0.9, 1.0); // Blue-white
+              light.intensity = 10;
+            } else if (maxTemp > 0.6) {
+              light.color.setRGB(1.0, 1.0, 0.95); // White
+              light.intensity = 8;
+            } else {
+              light.color.setRGB(1.0, 0.8, 0.6); // Yellow-orange
+              light.intensity = 6;
+            }
+          }
+        });
+
+        // Pulsing inner disk light
+        innerDiskLight.intensity = 10 + Math.sin(time * 3) * 2;
+
         // Animate jets
         jetUpper.visible = params.showJets;
         jetLower.visible = params.showJets;
@@ -440,12 +577,6 @@ const Ton618Observatory = () => {
 
         // Disk visibility
         diskInstance.visible = params.showDisk;
-
-        // Animate lights
-        diskLight1.position.x = Math.cos(time * 0.3) * 45;
-        diskLight1.position.z = Math.sin(time * 0.3) * 45;
-        diskLight2.position.x = Math.cos(time * 0.3 + Math.PI) * 45;
-        diskLight2.position.z = Math.sin(time * 0.3 + Math.PI) * 45;
       }
 
       // Update camera
@@ -481,6 +612,7 @@ const Ton618Observatory = () => {
       // Cleanup TDE
       if (star) star.destroy();
       if (debris) debris.destroy();
+      if (lymanAlphaBlob) lymanAlphaBlob.destroy();
 
       container.removeChild(renderer.domElement);
       renderer.dispose();
