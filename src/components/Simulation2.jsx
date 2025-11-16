@@ -48,10 +48,26 @@ const AdvancedAccretionPhysics = () => {
     showCompanionStar: true,
     companionStarDistance: 250,
     companionStarMass: 40,
-    companionStarTemperature: 40000
+    companionStarTemperature: 40000,
+    // Stellar wind physics
+    enableStellarWind: true,
+    windVelocity: 2000,
+    windDensity: 1.0,
+    enableGravitationalForce: true,
+    gravitationalStrength: 1.0,
+    showInfluenceSphere: false,
+    // Quantum effects
+    enableQuantumEffects: true,
+    hawkingRadiationIntensity: 0.5
   });
 
   const [isPlaying, setIsPlaying] = useState(true);
+  const [starStats, setStarStats] = useState({
+    windParticleCount: 0,
+    quantumParticleCount: 0,
+    influenceRadius: 0,
+    massLossRate: 0
+  });
   const [stats, setStats] = useState({
     fps: 60,
     particlesAccreted: 0,
@@ -531,7 +547,15 @@ const AdvancedAccretionPhysics = () => {
     const companionStar = new CompanionStar(scene, blackHoleMass, {
       mass: params.companionStarMass,
       temperature: params.companionStarTemperature,
-      orbitalRadius: params.companionStarDistance
+      orbitalRadius: params.companionStarDistance,
+      enableWind: params.enableStellarWind,
+      windVelocity: params.windVelocity,
+      windDensity: params.windDensity,
+      enableGravity: params.enableGravitationalForce,
+      gravitationalStrength: params.gravitationalStrength,
+      enableQuantumEffects: params.enableQuantumEffects,
+      hawkingRadiationIntensity: params.hawkingRadiationIntensity,
+      showInfluenceSphere: params.showInfluenceSphere
     });
     companionStarRef.current = companionStar;
 
@@ -998,6 +1022,15 @@ const AdvancedAccretionPhysics = () => {
       // Update companion star
       if (params.showCompanionStar && companionStar) {
         companionStar.update(deltaTime);
+
+        // Update star statistics
+        const starStatsData = companionStar.getStats();
+        setStarStats({
+          windParticleCount: starStatsData.windParticleCount,
+          quantumParticleCount: starStatsData.quantumParticleCount,
+          influenceRadius: parseFloat(starStatsData.influenceRadius),
+          massLossRate: parseFloat(starStatsData.massLossRate)
+        });
       }
 
       renderer.render(scene, camera);
@@ -1384,6 +1417,61 @@ const AdvancedAccretionPhysics = () => {
                     step={1000}
                     className="mt-1"
                   />
+                </div>
+
+                <div className="pt-2 mt-2 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-gray-200 text-xs">Stellar Wind</Label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => {
+                        setParams(p => ({ ...p, enableStellarWind: !p.enableStellarWind }));
+                        if (companionStarRef.current) {
+                          companionStarRef.current.setParameters({ enableWind: !params.enableStellarWind });
+                        }
+                      }}
+                    >
+                      {params.enableStellarWind ? "✓ ON" : "○ OFF"}
+                    </Button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-gray-200 text-xs">Gravity</Label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => {
+                        setParams(p => ({ ...p, enableGravitationalForce: !p.enableGravitationalForce }));
+                        if (companionStarRef.current) {
+                          companionStarRef.current.setParameters({ enableGravity: !params.enableGravitationalForce });
+                        }
+                      }}
+                    >
+                      {params.enableGravitationalForce ? "✓ ON" : "○ OFF"}
+                    </Button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-gray-200 text-xs">Quantum Effects</Label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => {
+                        setParams(p => ({ ...p, enableQuantumEffects: !p.enableQuantumEffects }));
+                        if (companionStarRef.current) {
+                          companionStarRef.current.setParameters({ enableQuantumEffects: !params.enableQuantumEffects });
+                        }
+                      }}
+                    >
+                      {params.enableQuantumEffects ? "✓ ON" : "○ OFF"}
+                    </Button>
+                  </div>
+                  <div className="pt-1 border-t border-gray-700 text-[10px] space-y-0.5">
+                    <p className="text-gray-400">Wind: <span className="text-cyan-400">{starStats.windParticleCount}</span> | Quantum: <span className="text-green-400">{starStats.quantumParticleCount}</span></p>
+                    <p className="text-gray-400">Hill: <span className="text-purple-400">{starStats.influenceRadius}</span> | Loss: <span className="text-yellow-400">{starStats.massLossRate}</span></p>
+                  </div>
                 </div>
               </div>
             )}

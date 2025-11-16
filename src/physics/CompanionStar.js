@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 /**
  * CompanionStar - Massive O-type supergiant in stable orbit around TON 618
- * Unlike the TDE star, this remains in orbit and provides gravitational influence
+ * Enhanced with stellar wind, gravitational influence, and quantum effects
  * O-type supergiants: 15-90 solar masses, very hot (30,000-50,000K), blue-white
  */
 export class CompanionStar {
@@ -17,6 +17,21 @@ export class CompanionStar {
     this.orbitalRadius = params.orbitalRadius || 250; // Distance from black hole
     this.orbitalVelocity = params.orbitalVelocity || this.calculateOrbitalVelocity(this.orbitalRadius);
 
+    // Stellar wind properties (O-type stars have powerful winds)
+    this.windVelocity = params.windVelocity || 2000; // km/s (typical O-type: 1000-3000 km/s)
+    this.windDensity = params.windDensity || 1.0; // Mass loss rate multiplier
+    this.windParticleCount = params.windParticleCount || 5000;
+    this.enableWind = params.enableWind !== undefined ? params.enableWind : true;
+
+    // Gravitational influence
+    this.gravitationalStrength = params.gravitationalStrength || 1.0;
+    this.influenceRadius = this.calculateHillRadius(); // Hill sphere
+    this.enableGravity = params.enableGravity !== undefined ? params.enableGravity : true;
+
+    // Quantum effects
+    this.hawkingRadiationIntensity = params.hawkingRadiationIntensity || 0.5;
+    this.enableQuantumEffects = params.enableQuantumEffects !== undefined ? params.enableQuantumEffects : true;
+
     // Orbital elements
     this.angle = params.initialAngle || 0;
     this.inclination = params.inclination || 0; // Orbital plane tilt
@@ -26,13 +41,37 @@ export class CompanionStar {
     this.position = new THREE.Vector3();
     this.velocity = new THREE.Vector3();
 
+    // Wind particles
+    this.windParticles = [];
+    this.windInstance = null;
+    this.windData = [];
+
+    // Quantum effect particles (Hawking radiation, pair creation)
+    this.quantumParticles = [];
+    this.quantumInstance = null;
+    this.quantumData = [];
+
     this.updateOrbitalPosition();
 
     // Visual
     this.mesh = null;
     this.coronaLayers = [];
+    this.influenceSphere = null;
+    this.bowShock = null;
 
     this.createStarMesh();
+    this.createStellarWind();
+    this.createInfluenceSphere();
+    this.createQuantumEffects();
+  }
+
+  /**
+   * Calculate Hill radius (sphere of gravitational influence)
+   * r_H = a * (m / 3M)^(1/3)
+   */
+  calculateHillRadius() {
+    const massRatio = this.mass / (this.blackHoleMass / 1e9); // Convert BH mass to solar masses
+    return this.orbitalRadius * Math.pow(massRatio / 3, 1/3);
   }
 
   /**
@@ -155,6 +194,340 @@ export class CompanionStar {
   }
 
   /**
+   * Create stellar wind particle system
+   * O-type stars have mass loss rates of ~10^-6 M☉/year
+   * Wind velocities: 1000-3000 km/s
+   */
+  createStellarWind() {
+    const particleGeometry = new THREE.SphereGeometry(0.08, 6, 6);
+
+    // Self-emissive shader for wind particles
+    const windMaterial = new THREE.ShaderMaterial({
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      uniforms: {
+        baseColor: { value: new THREE.Color(0.7, 0.85, 1.0) }
+      },
+      vertexShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vColor = instanceColor;
+          vAlpha = instanceColor.r; // Use red channel for alpha
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec3 emissive = vColor * 2.0;
+          gl_FragColor = vec4(emissive, vAlpha * 0.6);
+        }
+      `
+    });
+
+    this.windInstance = new THREE.InstancedMesh(
+      particleGeometry,
+      windMaterial,
+      this.windParticleCount
+    );
+    this.windInstance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(this.windInstance);
+
+    // Initialize wind particles
+    const visualRadius = this.radius * 0.5;
+    for (let i = 0; i < this.windParticleCount; i++) {
+      // Random position on star surface
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+
+      const x = Math.sin(phi) * Math.cos(theta);
+      const y = Math.sin(phi) * Math.sin(theta);
+      const z = Math.cos(phi);
+
+      const startRadius = visualRadius * (1.0 + Math.random() * 0.2);
+
+      this.windData.push({
+        position: new THREE.Vector3(x * startRadius, y * startRadius, z * startRadius),
+        direction: new THREE.Vector3(x, y, z).normalize(),
+        velocity: this.windVelocity * 0.01 * (0.8 + Math.random() * 0.4),
+        age: Math.random() * 200,
+        maxAge: 200,
+        color: new THREE.Color(0.7 + Math.random() * 0.2, 0.85, 1.0)
+      });
+    }
+
+    this.updateWindParticles();
+  }
+
+  /**
+   * Create gravitational influence sphere (Hill sphere visualization)
+   */
+  createInfluenceSphere() {
+    const geometry = new THREE.SphereGeometry(this.influenceRadius, 32, 32);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x4488ff,
+      transparent: true,
+      opacity: 0.08,
+      wireframe: true,
+      side: THREE.BackSide
+    });
+
+    this.influenceSphere = new THREE.Mesh(geometry, material);
+    this.influenceSphere.position.copy(this.position);
+    this.influenceSphere.visible = false; // Can be toggled
+    this.scene.add(this.influenceSphere);
+  }
+
+  /**
+   * Create quantum effect particles
+   * Hawking radiation, pair creation near event horizons
+   */
+  createQuantumEffects() {
+    const particleCount = 1000;
+    const particleGeometry = new THREE.SphereGeometry(0.05, 4, 4);
+
+    const quantumMaterial = new THREE.ShaderMaterial({
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      uniforms: {},
+      vertexShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vColor = instanceColor;
+          vAlpha = instanceColor.a;
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          // Quantum glow effect
+          vec3 emissive = vColor * 3.0;
+          gl_FragColor = vec4(emissive, vAlpha);
+        }
+      `
+    });
+
+    this.quantumInstance = new THREE.InstancedMesh(
+      particleGeometry,
+      quantumMaterial,
+      particleCount
+    );
+    this.quantumInstance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(this.quantumInstance);
+
+    // Initialize quantum particles (near the star surface for now)
+    const visualRadius = this.radius * 0.5;
+    for (let i = 0; i < particleCount; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+
+      const distance = visualRadius * (1.0 + Math.random() * 0.5);
+
+      this.quantumData.push({
+        position: new THREE.Vector3(
+          Math.sin(phi) * Math.cos(theta) * distance,
+          Math.sin(phi) * Math.sin(theta) * distance,
+          Math.cos(phi) * distance
+        ),
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * 0.1,
+          (Math.random() - 0.5) * 0.1,
+          (Math.random() - 0.5) * 0.1
+        ),
+        age: Math.random() * 100,
+        maxAge: 100,
+        type: Math.random() > 0.5 ? 'particle' : 'antiparticle',
+        color: Math.random() > 0.5 ?
+          new THREE.Color(0.3, 1.0, 0.3) :  // Green for particles
+          new THREE.Color(1.0, 0.3, 1.0)    // Magenta for antiparticles
+      });
+    }
+
+    this.updateQuantumParticles();
+  }
+
+  /**
+   * Update stellar wind particle positions
+   */
+  updateWindParticles() {
+    if (!this.windInstance || !this.enableWind) {
+      if (this.windInstance) this.windInstance.visible = false;
+      return;
+    }
+
+    this.windInstance.visible = true;
+    const matrix = new THREE.Matrix4();
+    const color = new THREE.Color();
+
+    for (let i = 0; i < this.windData.length; i++) {
+      const particle = this.windData[i];
+
+      // Update position (radial outward flow)
+      particle.position.addScaledVector(particle.direction, particle.velocity * this.windDensity);
+      particle.age++;
+
+      // Reset particle if too old
+      if (particle.age > particle.maxAge) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+
+        const x = Math.sin(phi) * Math.cos(theta);
+        const y = Math.sin(phi) * Math.sin(theta);
+        const z = Math.cos(phi);
+
+        const visualRadius = this.radius * 0.5;
+        particle.position.set(x * visualRadius, y * visualRadius, z * visualRadius);
+        particle.direction.set(x, y, z).normalize();
+        particle.age = 0;
+        particle.velocity = this.windVelocity * 0.01 * (0.8 + Math.random() * 0.4);
+      }
+
+      // Set matrix (position relative to star)
+      const worldPos = particle.position.clone().add(this.position);
+      matrix.setPosition(worldPos);
+      this.windInstance.setMatrixAt(i, matrix);
+
+      // Set color with fade based on age
+      const alpha = 1.0 - (particle.age / particle.maxAge);
+      color.copy(particle.color);
+      color.r = alpha; // Store alpha in red channel for shader
+      this.windInstance.setColorAt(i, color);
+    }
+
+    this.windInstance.instanceMatrix.needsUpdate = true;
+    if (this.windInstance.instanceColor) {
+      this.windInstance.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Update quantum effect particles
+   */
+  updateQuantumParticles() {
+    if (!this.quantumInstance || !this.enableQuantumEffects) {
+      if (this.quantumInstance) this.quantumInstance.visible = false;
+      return;
+    }
+
+    this.quantumInstance.visible = true;
+    const matrix = new THREE.Matrix4();
+    const color = new THREE.Color();
+
+    for (let i = 0; i < this.quantumData.length; i++) {
+      const particle = this.quantumData[i];
+
+      // Quantum uncertainty - jittery motion
+      const jitter = new THREE.Vector3(
+        (Math.random() - 0.5) * 0.05,
+        (Math.random() - 0.5) * 0.05,
+        (Math.random() - 0.5) * 0.05
+      );
+
+      particle.position.add(particle.velocity).add(jitter);
+      particle.age++;
+
+      // Pair annihilation - reset particle
+      if (particle.age > particle.maxAge) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const distance = this.radius * 0.5 * (1.0 + Math.random() * 0.5);
+
+        particle.position.set(
+          Math.sin(phi) * Math.cos(theta) * distance,
+          Math.sin(phi) * Math.sin(theta) * distance,
+          Math.cos(phi) * distance
+        );
+        particle.age = 0;
+        particle.type = Math.random() > 0.5 ? 'particle' : 'antiparticle';
+        particle.color = particle.type === 'particle' ?
+          new THREE.Color(0.3, 1.0, 0.3) :
+          new THREE.Color(1.0, 0.3, 1.0);
+      }
+
+      // Set matrix
+      const worldPos = particle.position.clone().add(this.position);
+      matrix.setPosition(worldPos);
+      this.quantumInstance.setMatrixAt(i, matrix);
+
+      // Set color with quantum fade
+      const alpha = Math.sin(particle.age * 0.1) * 0.5 + 0.5; // Quantum flicker
+      color.copy(particle.color);
+      color.a = alpha * this.hawkingRadiationIntensity;
+      this.quantumInstance.setColorAt(i, color);
+    }
+
+    this.quantumInstance.instanceMatrix.needsUpdate = true;
+    if (this.quantumInstance.instanceColor) {
+      this.quantumInstance.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Calculate gravitational force on a particle
+   * Returns force vector
+   */
+  calculateGravitationalForce(particlePosition) {
+    if (!this.enableGravity) return new THREE.Vector3(0, 0, 0);
+
+    const toStar = new THREE.Vector3().subVectors(this.position, particlePosition);
+    const distance = toStar.length();
+
+    // Outside Hill sphere - no influence
+    if (distance > this.influenceRadius) {
+      return new THREE.Vector3(0, 0, 0);
+    }
+
+    // F = G * m1 * m2 / r^2
+    // Simplified: F ∝ mass / r^2
+    const forceMagnitude = (this.mass * this.gravitationalStrength) / (distance * distance + 1); // +1 to prevent singularity
+
+    return toStar.normalize().multiplyScalar(forceMagnitude * 0.001); // Scale for simulation
+  }
+
+  /**
+   * Check if particle is affected by stellar wind (repulsion)
+   * Returns wind force vector
+   */
+  calculateWindForce(particlePosition) {
+    if (!this.enableWind) return new THREE.Vector3(0, 0, 0);
+
+    const fromStar = new THREE.Vector3().subVectors(particlePosition, this.position);
+    const distance = fromStar.length();
+
+    // Wind only affects particles within a certain range
+    const windRange = this.radius * 2;
+    if (distance > windRange) {
+      return new THREE.Vector3(0, 0, 0);
+    }
+
+    // Wind force decreases with distance (inverse square)
+    const windStrength = (this.windDensity * this.windVelocity) / (distance * distance + 1);
+
+    return fromStar.normalize().multiplyScalar(windStrength * 0.0001);
+  }
+
+  /**
+   * Get combined force (gravity + wind) on a particle
+   */
+  getParticleForce(particlePosition) {
+    const gravityForce = this.calculateGravitationalForce(particlePosition);
+    const windForce = this.calculateWindForce(particlePosition);
+
+    return gravityForce.add(windForce);
+  }
+
+  /**
    * Update star orbit and visuals
    */
   update(deltaTime = 0.016) {
@@ -166,6 +539,11 @@ export class CompanionStar {
 
     // Update mesh position
     this.mesh.position.copy(this.position);
+
+    // Update influence sphere position
+    if (this.influenceSphere) {
+      this.influenceSphere.position.copy(this.position);
+    }
 
     // Update shader time
     if (this.mesh.material.uniforms) {
@@ -180,6 +558,12 @@ export class CompanionStar {
       const pulseFactor = Math.sin(Date.now() * 0.001 + i) * 0.5 + 0.5;
       glow.material.opacity = (0.15 - i * 0.04) + pulseFactor * 0.05;
     });
+
+    // Update stellar wind
+    this.updateWindParticles();
+
+    // Update quantum effects
+    this.updateQuantumParticles();
   }
 
   /**
@@ -188,6 +572,11 @@ export class CompanionStar {
   setParameters(params) {
     if (params.mass !== undefined) {
       this.mass = params.mass;
+      this.influenceRadius = this.calculateHillRadius();
+      if (this.influenceSphere) {
+        this.influenceSphere.geometry.dispose();
+        this.influenceSphere.geometry = new THREE.SphereGeometry(this.influenceRadius, 32, 32);
+      }
     }
     if (params.temperature !== undefined) {
       this.temperature = params.temperature;
@@ -198,10 +587,39 @@ export class CompanionStar {
     if (params.orbitalRadius !== undefined) {
       this.orbitalRadius = params.orbitalRadius;
       this.orbitalVelocity = this.calculateOrbitalVelocity(this.orbitalRadius);
+      this.influenceRadius = this.calculateHillRadius();
+      if (this.influenceSphere) {
+        this.influenceSphere.geometry.dispose();
+        this.influenceSphere.geometry = new THREE.SphereGeometry(this.influenceRadius, 32, 32);
+      }
       this.updateOrbitalPosition();
     }
     if (params.orbitalVelocity !== undefined) {
       this.orbitalVelocity = params.orbitalVelocity;
+    }
+    if (params.windVelocity !== undefined) {
+      this.windVelocity = params.windVelocity;
+    }
+    if (params.windDensity !== undefined) {
+      this.windDensity = params.windDensity;
+    }
+    if (params.gravitationalStrength !== undefined) {
+      this.gravitationalStrength = params.gravitationalStrength;
+    }
+    if (params.hawkingRadiationIntensity !== undefined) {
+      this.hawkingRadiationIntensity = params.hawkingRadiationIntensity;
+    }
+    if (params.enableWind !== undefined) {
+      this.enableWind = params.enableWind;
+    }
+    if (params.enableGravity !== undefined) {
+      this.enableGravity = params.enableGravity;
+    }
+    if (params.enableQuantumEffects !== undefined) {
+      this.enableQuantumEffects = params.enableQuantumEffects;
+    }
+    if (params.showInfluenceSphere !== undefined && this.influenceSphere) {
+      this.influenceSphere.visible = params.showInfluenceSphere;
     }
   }
 
@@ -217,7 +635,22 @@ export class CompanionStar {
       temperature: this.temperature,
       orbitalRadius: this.orbitalRadius,
       orbitalVelocity: this.orbitalVelocity,
-      angle: this.angle
+      angle: this.angle,
+      influenceRadius: this.influenceRadius,
+      windVelocity: this.windVelocity,
+      windDensity: this.windDensity
+    };
+  }
+
+  /**
+   * Get statistics for UI display
+   */
+  getStats() {
+    return {
+      windParticleCount: this.windData.filter(p => p.age < p.maxAge).length,
+      quantumParticleCount: this.quantumData.filter(p => p.age < p.maxAge).length,
+      influenceRadius: this.influenceRadius.toFixed(1),
+      massLossRate: (this.windDensity * this.windVelocity * 0.001).toFixed(3)
     };
   }
 
@@ -234,6 +667,24 @@ export class CompanionStar {
         glow.geometry.dispose();
         glow.material.dispose();
       });
+    }
+
+    if (this.windInstance) {
+      this.scene.remove(this.windInstance);
+      this.windInstance.geometry.dispose();
+      this.windInstance.material.dispose();
+    }
+
+    if (this.quantumInstance) {
+      this.scene.remove(this.quantumInstance);
+      this.quantumInstance.geometry.dispose();
+      this.quantumInstance.material.dispose();
+    }
+
+    if (this.influenceSphere) {
+      this.scene.remove(this.influenceSphere);
+      this.influenceSphere.geometry.dispose();
+      this.influenceSphere.material.dispose();
     }
   }
 }
