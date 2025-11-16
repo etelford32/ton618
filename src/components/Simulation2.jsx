@@ -129,7 +129,9 @@ const AdvancedAccretionPhysics = () => {
         Math.sin(angle) * radius
       );
       diskInstance.setMatrixAt(i, tempMatrix);
-      diskInstance.setColorAt(i, tempColor.setHSL(0.6, 1, 0.4));
+      // Initial blackbody color
+      tempColor.setRGB(1.0, 0.7, 0.4).multiplyScalar(1.0);
+      diskInstance.setColorAt(i, tempColor);
     }
     
     diskInstance.instanceMatrix.needsUpdate = true;
@@ -400,14 +402,43 @@ const AdvancedAccretionPhysics = () => {
 
     // ACCRETION DISK
     const particleCount = 35000;
-    const diskGeometry = new THREE.SphereGeometry(0.4, 8, 8);
-    const diskMaterial = new THREE.MeshPhongMaterial({
+    const diskGeometry = new THREE.SphereGeometry(0.15, 8, 8);
+
+    // Shader material for self-emissive glow
+    const diskMaterial = new THREE.ShaderMaterial({
       transparent: true,
-      shininess: 150,
-      emissive: new THREE.Color(0x000000),
-      emissiveIntensity: 0
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      uniforms: {
+        baseColor: { value: new THREE.Color(1, 1, 1) }
+      },
+      vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vColor;
+
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          vColor = instanceColor;
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vNormal;
+        varying vec3 vColor;
+
+        void main() {
+          // Fresnel glow effect (brighter at edges)
+          float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0, 0, 1))), 2.0);
+          float glow = 0.6 + fresnel * 0.8;
+
+          // Temperature-based emission
+          vec3 emissive = vColor * glow * 2.0;
+
+          gl_FragColor = vec4(emissive, 0.9);
+        }
+      `
     });
-    
+
     const diskInstance = new THREE.InstancedMesh(diskGeometry, diskMaterial, particleCount);
     diskInstance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(diskInstance);
@@ -448,7 +479,9 @@ const AdvancedAccretionPhysics = () => {
         Math.sin(angle) * radius
       );
       diskInstance.setMatrixAt(i, tempMatrix);
-      diskInstance.setColorAt(i, tempColor.setHSL(0.6, 1, 0.4));
+      // Initial blackbody color
+      tempColor.setRGB(1.0, 0.7, 0.4).multiplyScalar(1.0);
+      diskInstance.setColorAt(i, tempColor);
     }
     
     diskDataRef.current = diskData;
@@ -898,19 +931,26 @@ const AdvancedAccretionPhysics = () => {
           
           diskInstance.setMatrixAt(i, updateMatrix);
           
-          // Color
-          if (p.temp > 1.0) {
-            updateColor.setRGB(1, 1, 1);
-          } else if (p.temp > 0.8) {
-            updateColor.setRGB(1, 1, 0.8 + p.temp * 0.2);
+          // Blackbody temperature colors
+          const brightness = 0.5 + p.brightness * 0.5;
+
+          if (p.temp > 1.0 || p.temp > 0.8) {
+            // Very hot - blue-white (10000K+)
+            updateColor.setRGB(0.8, 0.9, 1.0).multiplyScalar(1.5 + brightness);
           } else if (p.temp > 0.6) {
-            updateColor.setRGB(1, 0.9, 0.3 + p.temp * 0.5);
+            // Hot - white (6000-10000K)
+            updateColor.setRGB(1.0, 1.0, 0.95).multiplyScalar(1.3 + brightness);
           } else if (p.temp > 0.4) {
-            updateColor.setRGB(1, 0.5 + p.temp * 0.4, 0.2);
+            // Warm - yellow-white (4000-6000K)
+            updateColor.setRGB(1.0, 0.95, 0.7).multiplyScalar(1.2 + brightness * 0.8);
+          } else if (p.temp > 0.2) {
+            // Cool - orange (3000-4000K)
+            updateColor.setRGB(1.0, 0.7, 0.4).multiplyScalar(1.0 + brightness * 0.6);
           } else {
-            updateColor.setRGB(1, 0.3 + p.temp * 0.3, 0.1);
+            // Very cool - red (2000-3000K)
+            updateColor.setRGB(1.0, 0.5, 0.2).multiplyScalar(0.8 + brightness * 0.4);
           }
-          
+
           diskInstance.setColorAt(i, updateColor);
         }
         
