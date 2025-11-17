@@ -128,7 +128,10 @@ const AdvancedAccretionPhysics = () => {
       const height = (Math.random() - 0.5) * radius * 0.15;
       const speed = 0.012 * Math.pow(100 / radius, 1.5);
       const verticalSpeed = (Math.random() - 0.5) * 0.1;
-      
+
+      // Particle mass varies with radius (inner particles more massive)
+      const particleMass = 0.8 + Math.random() * 0.4 + (1.0 - (radius - ISCO * 1.5) / 150) * 0.3;
+
       diskData[i] = {
         angle: angle,
         radius: radius,
@@ -144,7 +147,11 @@ const AdvancedAccretionPhysics = () => {
         age: 0,
         orbitalTilt: (Math.random() - 0.5) * 0.3,
         verticalPhase: Math.random() * Math.PI * 2,
-        trail: []
+        trail: [],
+        vRadial: 0,
+        vTangential: 0,
+        vVertical: 0,
+        mass: particleMass
       };
       
       tempMatrix.setPosition(
@@ -478,7 +485,10 @@ const AdvancedAccretionPhysics = () => {
       const height = (Math.random() - 0.5) * radius * 0.15;
       const speed = 0.012 * Math.pow(100 / radius, 1.5);
       const verticalSpeed = (Math.random() - 0.5) * 0.1;
-      
+
+      // Particle mass varies with radius (inner particles more massive)
+      const particleMass = 0.8 + Math.random() * 0.4 + (1.0 - (radius - ISCO * 1.5) / 150) * 0.3;
+
       diskData.push({
         angle: angle,
         radius: radius,
@@ -494,7 +504,13 @@ const AdvancedAccretionPhysics = () => {
         age: 0,
         orbitalTilt: (Math.random() - 0.5) * 0.3,
         verticalPhase: Math.random() * Math.PI * 2,
-        trail: []
+        trail: [],
+        // Velocity fields for proper F=ma integration
+        vRadial: 0,      // Radial velocity (inward/outward)
+        vTangential: 0,  // Tangential velocity (orbital motion)
+        vVertical: 0,    // Vertical velocity (perpendicular to disk)
+        // Particle mass (inner particles more massive)
+        mass: particleMass
       });
       
       tempMatrix.setPosition(
@@ -809,19 +825,86 @@ const AdvancedAccretionPhysics = () => {
         let maxTemp = 0;
         let powerOutput = 0;
 
+        // === ADAPTIVE TIME STEPPING ===
+        // Calculate maximum acceleration magnitude to determine safe time step
+        let maxAccelMagnitude = 0;
+
+        for (let i = 0; i < diskData.length; i++) {
+          const p = diskData[i];
+
+          const distToISCO = p.radius - ISCO;
+          const infallAcceleration = distToISCO < 10 ? (1 + (10 - distToISCO) * 0.3) : 1;
+          const baseRadialAccel = -p.infallSpeed * params.accretionRate * params.viscosity * infallAcceleration * 60;
+          let radialForce = 0;
+          let tangentialForce = 0;
+          let verticalForce = 0;
+
+          if (params.showCompanionStar && companionStarRef.current) {
+            reusableParticlePos.set(
+              Math.cos(p.angle) * p.radius,
+              p.height,
+              Math.sin(p.angle) * p.radius
+            );
+            const force = companionStarRef.current.getParticleForce(reusableParticlePos);
+
+            if (force.length() > 0) {
+              reusableToParticle.set(reusableParticlePos.x, reusableParticlePos.z);
+              reusableRadialDir.copy(reusableToParticle).normalize();
+              reusableTangentialDir.set(-reusableRadialDir.y, reusableRadialDir.x);
+              reusableForceXZ.set(force.x, force.z);
+              radialForce = reusableForceXZ.dot(reusableRadialDir);
+              tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
+              verticalForce = force.y;
+            }
+          }
+
+          const totalRadialAccel = Math.abs((baseRadialAccel + radialForce * 30) / p.mass);
+          const totalTangentialAccel = Math.abs((tangentialForce * 1.2) / p.mass);
+          const totalVerticalAccel = Math.abs((verticalForce * 18) / p.mass);
+
+          const accelMagnitude = Math.sqrt(
+            totalRadialAccel * totalRadialAccel +
+            totalTangentialAccel * totalTangentialAccel +
+            totalVerticalAccel * totalVerticalAccel
+          );
+
+          maxAccelMagnitude = Math.max(maxAccelMagnitude, accelMagnitude);
+        }
+
+        // Calculate adaptive time step (CFL condition)
+        const baseTimestep = 0.016 * params.timeScale; // ~60 FPS adjusted for timeScale
+        const courantFactor = 0.3; // Safety factor
+        const characteristicLength = 1.0; // Approximate particle spacing
+
+        let adaptiveDt = baseTimestep;
+        if (maxAccelMagnitude > 0.1) {
+          const safeDt = courantFactor * Math.sqrt(characteristicLength / maxAccelMagnitude) * params.timeScale;
+          adaptiveDt = Math.min(baseTimestep, Math.max(safeDt, 0.001 * params.timeScale)); // Clamp between 0.001 and 0.016 (scaled by timeScale)
+        }
+
+        // === PHYSICS INTEGRATION WITH ADAPTIVE TIME STEP ===
         for (let i = 0; i < diskData.length; i++) {
           const p = diskData[i];
           p.age++;
 
-          p.angle += p.speed * params.timeScale;
+          // === PHYSICS: PROPER VELOCITY-BASED FORCE INTEGRATION ===
+          // F = ma → a = F/m → v += a×Δt → x += v×Δt
 
           const distToISCO = p.radius - ISCO;
           const infallAcceleration = distToISCO < 10 ? (1 + (10 - distToISCO) * 0.3) : 1;
-          p.radius -= p.infallSpeed * params.accretionRate * params.viscosity * infallAcceleration * params.timeScale;
+
+          // 1. Calculate intrinsic forces (gravity, viscosity)
+          const baseRadialAccel = -p.infallSpeed * params.accretionRate * params.viscosity * infallAcceleration * 60; // Inward acceleration
+          const baseTangentialVel = p.speed * 60; // Orbital velocity
+          const baseVerticalAccel = 0; // No base vertical forces
 
           totalInfallSpeed += p.infallSpeed * infallAcceleration;
 
-          // Companion star gravitational/magnetic influence
+          // 2. Apply companion star gravitational/magnetic influence
+          let radialForce = 0;
+          let tangentialForce = 0;
+          let verticalForce = 0;
+
           if (params.showCompanionStar && companionStarRef.current) {
             // Reuse vector instead of allocating new one
             reusableParticlePos.set(
@@ -840,26 +923,40 @@ const AdvancedAccretionPhysics = () => {
 
               // Project force onto radial and tangential directions
               reusableForceXZ.set(force.x, force.z);
-              const radialForce = reusableForceXZ.dot(reusableRadialDir);
-              const tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
-
-              // Apply forces (scaled for simulation stability)
-              p.radius += radialForce * 0.5 * params.timeScale;
-              p.angle += tangentialForce / (p.radius + 1) * 0.02 * params.timeScale;
-              p.height += force.y * 0.3 * params.timeScale;
-
-              // Clamp height to reasonable bounds
-              p.height = Math.max(-20, Math.min(20, p.height));
+              radialForce = reusableForceXZ.dot(reusableRadialDir);
+              tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
+              verticalForce = force.y;
             }
           }
 
-          // Vertical dynamics
+          // 3. Calculate turbulence and vertical oscillations
           p.verticalPhase += 0.02 * params.timeScale * params.verticalMotion;
           const verticalOscillation = Math.sin(p.verticalPhase) * 3;
           const turbulentHeight = Math.sin(time * 2 + i * 0.01) * params.turbulence * 2;
-          
+          const turbulentVerticalAccel = (verticalOscillation + turbulentHeight) * 0.5;
+
+          // 4. Calculate total acceleration (F/m, using particle mass)
+          const totalRadialAccel = (baseRadialAccel + radialForce * 30) / p.mass; // a = F/m
+          const totalTangentialAccel = (tangentialForce * 1.2) / p.mass; // a = F/m
+          const totalVerticalAccel = (baseVerticalAccel + verticalForce * 18 + turbulentVerticalAccel) / p.mass; // a = F/m
+
+          // 5. Update velocities: v += a × Δt (using adaptive timestep)
+          p.vRadial += totalRadialAccel * adaptiveDt;
+          p.vTangential = baseTangentialVel + totalTangentialAccel; // Mix with base orbital velocity
+          p.vVertical += totalVerticalAccel * adaptiveDt;
+
+          // 6. Apply damping to prevent runaway velocities
+          p.vRadial *= 0.95;
           const heightFactor = Math.max(0.2, p.radius / p.initialRadius);
-          p.height = (p.height * 0.98 + verticalOscillation * 0.02) * heightFactor + turbulentHeight;
+          p.vVertical *= (0.90 * heightFactor);
+
+          // 7. Update positions: x += v × Δt (using adaptive timestep)
+          p.radius += p.vRadial * adaptiveDt;
+          p.angle += (p.vTangential / (p.radius + 1)) * adaptiveDt; // Convert linear to angular velocity
+          p.height += p.vVertical * adaptiveDt;
+
+          // Clamp height to reasonable bounds
+          p.height = Math.max(-20, Math.min(20, p.height));
           
           p.orbitalTilt += 0.001 * params.frameDragging * params.spinParameter * params.timeScale;
           const tiltedHeight = p.height * Math.cos(p.orbitalTilt);
