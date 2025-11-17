@@ -627,7 +627,9 @@ const Ton618Simulation = () => {
       gravitationalStrength: params.gravitationalStrength,
       enableQuantumEffects: params.enableQuantumEffects,
       hawkingRadiationIntensity: params.hawkingRadiationIntensity,
-      showInfluenceSphere: params.showInfluenceSphere
+      showInfluenceSphere: params.showInfluenceSphere,
+      enableAccretionSphere: true, // Enable accretion flow visualization
+      accretionParticleCount: 3000 // Number of accretion particles
     });
     companionStarRef.current = companionStar;
 
@@ -698,9 +700,12 @@ const Ton618Simulation = () => {
 
       let launchesThisFrame = 0;
 
-      // === ADAPTIVE TIME STEPPING ===
-      // Calculate maximum acceleration magnitude to determine safe time step
+      // === ADAPTIVE TIME STEPPING WITH SINGLE FORCE CALCULATION ===
+      // Calculate forces once and reuse for both timestep calculation and integration
       let maxAccelMagnitude = 0;
+
+      // Pre-calculate all forces to avoid double computation
+      const particleForces = new Array(diskData.length);
 
       for (let i = 0; i < diskData.length; i++) {
         const p = diskData[i];
@@ -729,9 +734,14 @@ const Ton618Simulation = () => {
           }
         }
 
-        const totalRadialAccel = Math.abs((baseRadialAccel + radialForce * 30) / p.mass);
-        const totalTangentialAccel = Math.abs((tangentialForce * 1.2) / p.mass);
-        const totalVerticalAccel = Math.abs((verticalForce * 18) / p.mass);
+        // Store forces for later use
+        particleForces[i] = { radialForce, tangentialForce, verticalForce, baseRadialAccel };
+
+        // Calculate acceleration magnitude for adaptive timestep (protect against division by zero)
+        const particleMass = Math.max(p.mass, 0.1); // Clamp minimum mass
+        const totalRadialAccel = Math.abs((baseRadialAccel + radialForce * 30) / particleMass);
+        const totalTangentialAccel = Math.abs((tangentialForce * 1.2) / particleMass);
+        const totalVerticalAccel = Math.abs((verticalForce * 18) / particleMass);
 
         const accelMagnitude = Math.sqrt(
           totalRadialAccel * totalRadialAccel +
@@ -753,62 +763,42 @@ const Ton618Simulation = () => {
         adaptiveDt = Math.min(baseTimestep, Math.max(safeDt, 0.001)); // Clamp between 0.001 and 0.016
       }
 
-      // === PHYSICS INTEGRATION WITH ADAPTIVE TIME STEP ===
+      // === PHYSICS INTEGRATION WITH PRE-CALCULATED FORCES ===
       for (let i = 0; i < diskData.length; i++) {
         const p = diskData[i];
 
         // === PHYSICS: PROPER VELOCITY-BASED FORCE INTEGRATION ===
         // F = ma → a = F/m → v += a×Δt → x += v×Δt
 
+        // Retrieve pre-calculated forces
+        const { radialForce, tangentialForce, verticalForce, baseRadialAccel } = particleForces[i];
+
         // 1. Calculate intrinsic forces (gravity, viscosity)
-        const baseRadialAccel = -p.infallSpeed * params.spiralStrength * 0.018 * 60; // Inward acceleration
         const baseTangentialVel = p.speed * params.diskRotationSpeed * 60; // Orbital velocity
         const baseVerticalAccel = 0; // No base vertical forces
 
-        // 2. Apply companion star gravitational/magnetic influence
-        let radialForce = 0;
-        let tangentialForce = 0;
-        let verticalForce = 0;
+        // 2. Calculate total acceleration (F/m, using particle mass with safety clamp)
+        const particleMass = Math.max(p.mass, 0.1); // Prevent division by zero
+        const totalRadialAccel = (baseRadialAccel + radialForce * 30) / particleMass; // a = F/m
+        const totalTangentialAccel = (tangentialForce * 1.2) / particleMass; // a = F/m
+        const totalVerticalAccel = (baseVerticalAccel + verticalForce * 18) / particleMass; // a = F/m
 
-        if (params.showCompanionStar && companionStarRef.current) {
-          // Reuse vector instead of allocating new one
-          reusableParticlePos.set(
-            Math.cos(p.angle) * p.radius,
-            p.height,
-            Math.sin(p.angle) * p.radius
-          );
-
-          const force = companionStarRef.current.getParticleForce(reusableParticlePos);
-
-          if (force.length() > 0) {
-            // Convert force to cylindrical coordinates (reuse vectors)
-            reusableToParticle.set(reusableParticlePos.x, reusableParticlePos.z);
-            reusableRadialDir.copy(reusableToParticle).normalize();
-            reusableTangentialDir.set(-reusableRadialDir.y, reusableRadialDir.x);
-
-            // Project force onto radial and tangential directions
-            reusableForceXZ.set(force.x, force.z);
-            radialForce = reusableForceXZ.dot(reusableRadialDir);
-            tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
-            verticalForce = force.y;
-          }
-        }
-
-        // 3. Calculate total acceleration (F/m, using particle mass)
-        const totalRadialAccel = (baseRadialAccel + radialForce * 30) / p.mass; // a = F/m
-        const totalTangentialAccel = (tangentialForce * 1.2) / p.mass; // a = F/m
-        const totalVerticalAccel = (baseVerticalAccel + verticalForce * 18) / p.mass; // a = F/m
-
-        // 4. Update velocities: v += a × Δt (using adaptive timestep)
+        // 3. Update velocities: v += a × Δt (using adaptive timestep)
         p.vRadial += totalRadialAccel * adaptiveDt;
         p.vTangential = baseTangentialVel + totalTangentialAccel; // Mix with base orbital velocity
         p.vVertical += totalVerticalAccel * adaptiveDt;
 
-        // 5. Apply damping to prevent runaway velocities
+        // 4. Apply damping to prevent runaway velocities
         p.vRadial *= 0.95;
         p.vVertical *= 0.90;
 
-        // 6. Update positions: x += v × Δt (using adaptive timestep)
+        // Clamp velocities to prevent NaN propagation
+        const maxVelocity = 10.0;
+        p.vRadial = Math.max(-maxVelocity, Math.min(maxVelocity, p.vRadial || 0));
+        p.vTangential = Math.max(-maxVelocity, Math.min(maxVelocity, p.vTangential || 0));
+        p.vVertical = Math.max(-maxVelocity, Math.min(maxVelocity, p.vVertical || 0));
+
+        // 5. Update positions: x += v × Δt (using adaptive timestep)
         p.radius += p.vRadial * adaptiveDt;
         p.angle += (p.vTangential / (p.radius + 1)) * adaptiveDt; // Convert linear to angular velocity
         p.height += p.vVertical * adaptiveDt;
