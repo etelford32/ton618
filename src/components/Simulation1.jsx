@@ -515,7 +515,10 @@ const Ton618Simulation = () => {
       
       // Density falls off with radius and height
       const density = Math.exp(-Math.abs(height) / diskThickness) * Math.pow(50 / radius, 1.5);
-      
+
+      // Particle mass proportional to density (more massive in denser regions)
+      const particleMass = 0.7 + density * 0.5 + Math.random() * 0.3;
+
       diskData.push({
         // Position
         angle: angle,
@@ -523,26 +526,32 @@ const Ton618Simulation = () => {
         initialRadius: radius,
         height: height,
         baseHeight: height,
-        
+
         // Relativity
         orbitalPlaneAngle: 0, // Frame dragging precession
         frameDragAccumulated: 0,
-        
+
         // Dynamics
         speed: keplerianSpeed,
         baseSpeed: keplerianSpeed,
         verticalPhase: Math.random() * Math.PI * 2,
         infallSpeed: 0.012 * (1 / radius), // Viscous infall
-        
+
+        // Velocity fields for proper F=ma integration
+        vRadial: 0,      // Radial velocity (inward/outward)
+        vTangential: 0,  // Tangential velocity (orbital motion)
+        vVertical: 0,    // Vertical velocity (perpendicular to disk)
+
         // Thermodynamics
         temp: temp,
         baseTemp: temp,
         heatFromViscosity: 0,
-        
+
         // Physical properties
         density: density,
         particleSize: 0.35 + density * 0.3,
-        
+        mass: particleMass, // Particle mass (proportional to density)
+
         // State
         magneticFieldLine: Math.floor(Math.random() * numFieldLines),
         isInISCO: false,
@@ -689,16 +698,78 @@ const Ton618Simulation = () => {
 
       let launchesThisFrame = 0;
 
+      // === ADAPTIVE TIME STEPPING ===
+      // Calculate maximum acceleration magnitude to determine safe time step
+      let maxAccelMagnitude = 0;
+
       for (let i = 0; i < diskData.length; i++) {
         const p = diskData[i];
 
-        // === KEPLERIAN ORBITAL MOTION ===
-        p.angle += p.speed * params.diskRotationSpeed;
+        const baseRadialAccel = -p.infallSpeed * params.spiralStrength * 0.018 * 60;
+        let radialForce = 0;
+        let tangentialForce = 0;
+        let verticalForce = 0;
 
-        // === VISCOUS INFALL ===
-        p.radius -= p.infallSpeed * params.spiralStrength * 0.018;
+        if (params.showCompanionStar && companionStarRef.current) {
+          reusableParticlePos.set(
+            Math.cos(p.angle) * p.radius,
+            p.height,
+            Math.sin(p.angle) * p.radius
+          );
+          const force = companionStarRef.current.getParticleForce(reusableParticlePos);
 
-        // === COMPANION STAR GRAVITATIONAL/MAGNETIC INFLUENCE ===
+          if (force.length() > 0) {
+            reusableToParticle.set(reusableParticlePos.x, reusableParticlePos.z);
+            reusableRadialDir.copy(reusableToParticle).normalize();
+            reusableTangentialDir.set(-reusableRadialDir.y, reusableRadialDir.x);
+            reusableForceXZ.set(force.x, force.z);
+            radialForce = reusableForceXZ.dot(reusableRadialDir);
+            tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
+            verticalForce = force.y;
+          }
+        }
+
+        const totalRadialAccel = Math.abs((baseRadialAccel + radialForce * 30) / p.mass);
+        const totalTangentialAccel = Math.abs((tangentialForce * 1.2) / p.mass);
+        const totalVerticalAccel = Math.abs((verticalForce * 18) / p.mass);
+
+        const accelMagnitude = Math.sqrt(
+          totalRadialAccel * totalRadialAccel +
+          totalTangentialAccel * totalTangentialAccel +
+          totalVerticalAccel * totalVerticalAccel
+        );
+
+        maxAccelMagnitude = Math.max(maxAccelMagnitude, accelMagnitude);
+      }
+
+      // Calculate adaptive time step (CFL condition)
+      const baseTimestep = 0.016; // ~60 FPS
+      const courantFactor = 0.3; // Safety factor
+      const characteristicLength = 1.0; // Approximate particle spacing
+
+      let adaptiveDt = baseTimestep;
+      if (maxAccelMagnitude > 0.1) {
+        const safeDt = courantFactor * Math.sqrt(characteristicLength / maxAccelMagnitude);
+        adaptiveDt = Math.min(baseTimestep, Math.max(safeDt, 0.001)); // Clamp between 0.001 and 0.016
+      }
+
+      // === PHYSICS INTEGRATION WITH ADAPTIVE TIME STEP ===
+      for (let i = 0; i < diskData.length; i++) {
+        const p = diskData[i];
+
+        // === PHYSICS: PROPER VELOCITY-BASED FORCE INTEGRATION ===
+        // F = ma → a = F/m → v += a×Δt → x += v×Δt
+
+        // 1. Calculate intrinsic forces (gravity, viscosity)
+        const baseRadialAccel = -p.infallSpeed * params.spiralStrength * 0.018 * 60; // Inward acceleration
+        const baseTangentialVel = p.speed * params.diskRotationSpeed * 60; // Orbital velocity
+        const baseVerticalAccel = 0; // No base vertical forces
+
+        // 2. Apply companion star gravitational/magnetic influence
+        let radialForce = 0;
+        let tangentialForce = 0;
+        let verticalForce = 0;
+
         if (params.showCompanionStar && companionStarRef.current) {
           // Reuse vector instead of allocating new one
           reusableParticlePos.set(
@@ -717,18 +788,33 @@ const Ton618Simulation = () => {
 
             // Project force onto radial and tangential directions
             reusableForceXZ.set(force.x, force.z);
-            const radialForce = reusableForceXZ.dot(reusableRadialDir);
-            const tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
-
-            // Apply forces (scaled for simulation stability)
-            p.radius += radialForce * 0.5;
-            p.angle += tangentialForce / (p.radius + 1) * 0.02;
-            p.height += force.y * 0.3;
-
-            // Clamp height to reasonable bounds
-            p.height = Math.max(-15, Math.min(15, p.height));
+            radialForce = reusableForceXZ.dot(reusableRadialDir);
+            tangentialForce = reusableForceXZ.dot(reusableTangentialDir);
+            verticalForce = force.y;
           }
         }
+
+        // 3. Calculate total acceleration (F/m, using particle mass)
+        const totalRadialAccel = (baseRadialAccel + radialForce * 30) / p.mass; // a = F/m
+        const totalTangentialAccel = (tangentialForce * 1.2) / p.mass; // a = F/m
+        const totalVerticalAccel = (baseVerticalAccel + verticalForce * 18) / p.mass; // a = F/m
+
+        // 4. Update velocities: v += a × Δt (using adaptive timestep)
+        p.vRadial += totalRadialAccel * adaptiveDt;
+        p.vTangential = baseTangentialVel + totalTangentialAccel; // Mix with base orbital velocity
+        p.vVertical += totalVerticalAccel * adaptiveDt;
+
+        // 5. Apply damping to prevent runaway velocities
+        p.vRadial *= 0.95;
+        p.vVertical *= 0.90;
+
+        // 6. Update positions: x += v × Δt (using adaptive timestep)
+        p.radius += p.vRadial * adaptiveDt;
+        p.angle += (p.vTangential / (p.radius + 1)) * adaptiveDt; // Convert linear to angular velocity
+        p.height += p.vVertical * adaptiveDt;
+
+        // Clamp height to reasonable bounds
+        p.height = Math.max(-15, Math.min(15, p.height));
 
         // === FRAME DRAGGING ===
         const frameDragRate = getFrameDraggingRate(p.radius, params.spinParameter);
