@@ -54,6 +54,13 @@ export class CompanionStar {
     this.quantumInstance = null;
     this.quantumData = [];
 
+    // Accretion sphere - particles that can be captured by black hole
+    this.accretionParticles = [];
+    this.accretionInstance = null;
+    this.accretionData = [];
+    this.accretionParticleCount = params.accretionParticleCount || 3000;
+    this.enableAccretionSphere = params.enableAccretionSphere !== undefined ? params.enableAccretionSphere : true;
+
     // Cached calculations (for performance - recalculated when orbital params change)
     this.rocheRadius = null; // Will be calculated after orbital position is set
 
@@ -72,6 +79,7 @@ export class CompanionStar {
     this.createStellarWind();
     this.createInfluenceSphere();
     this.createQuantumEffects();
+    this.createAccretionSphere();
   }
 
   /**
@@ -367,6 +375,88 @@ export class CompanionStar {
   }
 
   /**
+   * Create accretion sphere - particles that can be captured by black hole gravity
+   * These particles represent material from the star's outer atmosphere that can flow to the black hole
+   */
+  createAccretionSphere() {
+    const particleGeometry = new THREE.SphereGeometry(0.4, 8, 8);
+
+    // Orange/red shader for accretion material
+    const accretionMaterial = new THREE.ShaderMaterial({
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      uniforms: {
+        baseColor: { value: new THREE.Color(1.0, 0.6, 0.3) }
+      },
+      vertexShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vColor = instanceColor;
+          vAlpha = instanceColor.a;
+          gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec3 emissive = vColor * 2.5;
+          gl_FragColor = vec4(emissive, vAlpha * 0.9);
+        }
+      `
+    });
+
+    this.accretionInstance = new THREE.InstancedMesh(
+      particleGeometry,
+      accretionMaterial,
+      this.accretionParticleCount
+    );
+    this.accretionInstance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(this.accretionInstance);
+
+    // Initialize accretion particles in a sphere around the star
+    const visualRadius = this.radius * 0.5;
+    for (let i = 0; i < this.accretionParticleCount; i++) {
+      // Random position in accretion sphere (1.5-4x star radius)
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const distance = visualRadius * (1.5 + Math.random() * 2.5);
+
+      const x = Math.sin(phi) * Math.cos(theta) * distance;
+      const y = Math.sin(phi) * Math.sin(theta) * distance;
+      const z = Math.cos(phi) * distance;
+
+      // Particle mass: scaled units, clamped to reasonable range
+      // Smaller particles (0.001-0.01 in our scaled system)
+      const particleMass = 0.001 + Math.random() * 0.009;
+
+      this.accretionData.push({
+        position: new THREE.Vector3(x, y, z),
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * 0.05,  // Small initial random velocity
+          (Math.random() - 0.5) * 0.05,
+          (Math.random() - 0.5) * 0.05
+        ),
+        mass: particleMass,  // Particle mass for gravitational calculations
+        age: 0,
+        maxAge: 1000,  // Long lifetime
+        captured: false,  // Track if captured by black hole
+        color: new THREE.Color(
+          0.9 + Math.random() * 0.1,  // Orange-red
+          0.5 + Math.random() * 0.2,
+          0.2 + Math.random() * 0.2
+        )
+      });
+    }
+
+    this.updateAccretionParticles();
+  }
+
+  /**
    * Update stellar wind particle positions
    */
   updateWindParticles() {
@@ -480,6 +570,121 @@ export class CompanionStar {
     this.quantumInstance.instanceMatrix.needsUpdate = true;
     if (this.quantumInstance.instanceColor) {
       this.quantumInstance.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Update accretion sphere particles with gravity from both star and black hole
+   */
+  updateAccretionParticles() {
+    if (!this.accretionInstance || !this.enableAccretionSphere) {
+      if (this.accretionInstance) this.accretionInstance.visible = false;
+      return;
+    }
+
+    this.accretionInstance.visible = true;
+    const matrix = new THREE.Matrix4();
+    const color = new THREE.Color();
+
+    // Gravitational constant (scaled for simulation)
+    const G = 0.01;
+
+    // Mass clamping to prevent extreme forces
+    const starMassClamped = Math.min(this.mass, 100); // Clamp star mass
+    const blackHoleMassClamped = Math.min(this.blackHoleMass / 1e9, 100000); // Clamp BH mass to 100k solar masses for calculation
+
+    for (let i = 0; i < this.accretionData.length; i++) {
+      const particle = this.accretionData[i];
+
+      // === GRAVITATIONAL FORCES ===
+      // World position of particle
+      const worldPos = particle.position.clone().add(this.position);
+
+      // 1. Force from companion star (towards star)
+      const toStar = new THREE.Vector3().subVectors(this.position, worldPos);
+      const distToStar = Math.max(toStar.length(), 0.1); // Prevent singularity
+      const starForceMag = (G * starMassClamped * particle.mass) / (distToStar * distToStar);
+      const starForce = toStar.normalize().multiplyScalar(starForceMag);
+
+      // 2. Force from black hole (towards black hole at origin)
+      const toBH = new THREE.Vector3().copy(worldPos).negate(); // Vector to BH at (0,0,0)
+      const distToBH = Math.max(toBH.length(), 1.0); // Prevent extreme forces near BH
+      const bhForceMag = (G * blackHoleMassClamped * particle.mass) / (distToBH * distToBH);
+      const bhForce = toBH.normalize().multiplyScalar(bhForceMag);
+
+      // 3. Total force and acceleration (F = ma, so a = F/m)
+      const totalForce = new THREE.Vector3().addVectors(starForce, bhForce);
+      const acceleration = totalForce.divideScalar(particle.mass);
+
+      // 4. Update velocity: v += a × Δt
+      const dt = 0.016; // ~60 FPS
+      particle.velocity.addScaledVector(acceleration, dt);
+
+      // 5. Apply damping to prevent runaway velocities
+      particle.velocity.multiplyScalar(0.98);
+
+      // Clamp velocity magnitude to reasonable range
+      const maxVelocity = 5.0;
+      if (particle.velocity.length() > maxVelocity) {
+        particle.velocity.normalize().multiplyScalar(maxVelocity);
+      }
+
+      // 6. Update position: x += v × Δt
+      particle.position.addScaledVector(particle.velocity, dt);
+
+      // === LIFECYCLE MANAGEMENT ===
+      particle.age++;
+
+      // Check if captured by black hole (within ~20 units of origin)
+      if (worldPos.length() < 20) {
+        particle.captured = true;
+        // Change color to bright yellow-white (heating up)
+        particle.color.setRGB(1.0, 0.95, 0.7);
+      }
+
+      // Reset particle if too old or too far from star
+      const distFromStar = particle.position.length();
+      if (particle.age > particle.maxAge || distFromStar > this.radius * 10) {
+        // Respawn near star
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const visualRadius = this.radius * 0.5;
+        const distance = visualRadius * (1.5 + Math.random() * 2.5);
+
+        particle.position.set(
+          Math.sin(phi) * Math.cos(theta) * distance,
+          Math.sin(phi) * Math.sin(theta) * distance,
+          Math.cos(phi) * distance
+        );
+        particle.velocity.set(
+          (Math.random() - 0.5) * 0.05,
+          (Math.random() - 0.5) * 0.05,
+          (Math.random() - 0.5) * 0.05
+        );
+        particle.age = 0;
+        particle.captured = false;
+        particle.color.setRGB(
+          0.9 + Math.random() * 0.1,
+          0.5 + Math.random() * 0.2,
+          0.2 + Math.random() * 0.2
+        );
+      }
+
+      // === UPDATE INSTANCE ===
+      const finalWorldPos = particle.position.clone().add(this.position);
+      matrix.setPosition(finalWorldPos);
+      this.accretionInstance.setMatrixAt(i, matrix);
+
+      // Color fades as particle ages
+      const alpha = particle.captured ? 1.0 : (1.0 - particle.age / particle.maxAge);
+      color.copy(particle.color);
+      color.a = alpha;
+      this.accretionInstance.setColorAt(i, color);
+    }
+
+    this.accretionInstance.instanceMatrix.needsUpdate = true;
+    if (this.accretionInstance.instanceColor) {
+      this.accretionInstance.instanceColor.needsUpdate = true;
     }
   }
 
@@ -614,6 +819,9 @@ export class CompanionStar {
 
     // Update quantum effects
     this.updateQuantumParticles();
+
+    // Update accretion sphere
+    this.updateAccretionParticles();
   }
 
   /**
@@ -670,6 +878,9 @@ export class CompanionStar {
     if (params.enableQuantumEffects !== undefined) {
       this.enableQuantumEffects = params.enableQuantumEffects;
     }
+    if (params.enableAccretionSphere !== undefined) {
+      this.enableAccretionSphere = params.enableAccretionSphere;
+    }
     if (params.showInfluenceSphere !== undefined && this.influenceSphere) {
       this.influenceSphere.visible = params.showInfluenceSphere;
     }
@@ -704,6 +915,8 @@ export class CompanionStar {
     return {
       windParticleCount: this.windData.filter(p => p.age < p.maxAge).length,
       quantumParticleCount: this.quantumData.filter(p => p.age < p.maxAge).length,
+      accretionParticleCount: this.accretionData.filter(p => p.age < p.maxAge).length,
+      capturedParticleCount: this.accretionData.filter(p => p.captured).length,
       influenceRadius: this.influenceRadius.toFixed(1),
       massLossRate: (this.windDensity * this.windVelocity * 0.001).toFixed(3)
     };
@@ -734,6 +947,12 @@ export class CompanionStar {
       this.scene.remove(this.quantumInstance);
       this.quantumInstance.geometry.dispose();
       this.quantumInstance.material.dispose();
+    }
+
+    if (this.accretionInstance) {
+      this.scene.remove(this.accretionInstance);
+      this.accretionInstance.geometry.dispose();
+      this.accretionInstance.material.dispose();
     }
 
     if (this.influenceSphere) {
